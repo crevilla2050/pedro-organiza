@@ -2,6 +2,11 @@ import re
 import unicodedata
 from typing import Optional
 
+# ============================================================
+# Normalization v0 — core rules
+# ============================================================
+NORMALIZATION_VERSION = "v0"
+
 NOISE_TOKENS = {
     "remaster",
     "remastered",
@@ -16,7 +21,7 @@ NOISE_TOKENS = {
     "edition",
 }
 
-# Minimal transliteration map (v0)
+# Minimal transliteration map (v0 only)
 TRANSLITERATION_MAP = {
     "ð": "d",
     "Ð": "d",
@@ -29,10 +34,17 @@ RE_DIGITS_ONLY = re.compile(r"^\d+$")
 
 
 def normalize_text(value: Optional[str]) -> str:
+    """
+    Base normalization function (v0).
+
+    Conservative, deterministic, lossy-but-predictable.
+    Produces ASCII, lowercase, whitespace-normalized output.
+    """
+
     if not value:
         return ""
 
-    # ---- Stage 1: Unicode normalization ----
+    # ---- Unicode normalization ----
     text = unicodedata.normalize("NFKD", value)
 
     # Remove combining marks
@@ -42,104 +54,56 @@ def normalize_text(value: Optional[str]) -> str:
     for src, dst in TRANSLITERATION_MAP.items():
         text = text.replace(src, dst)
 
-    # Remove remaining non-ASCII characters
+    # Drop remaining non-ASCII
     text = text.encode("ascii", "ignore").decode("ascii")
 
-    # ---- Stage 2: lowercase ----
+    # ---- Lowercase ----
     text = text.lower()
 
-    # ---- Stage 3: punctuation & separators ----
+    # ---- Punctuation & separators ----
     text = RE_PUNCTUATION.sub(" ", text)
     text = RE_SEPARATORS.sub(" ", text)
 
-    # ---- Stage 4: whitespace normalization ----
+    # ---- Whitespace ----
     text = RE_WHITESPACE.sub(" ", text).strip()
     if not text:
         return ""
 
     tokens = text.split(" ")
 
-    # Detect presence of numeric qualifiers (years, editions)
     has_numeric_token = any(RE_DIGITS_ONLY.match(t) for t in tokens)
 
-    # ---- Stage 5: token filtering ----
+    # ---- Token filtering ----
     words = []
     for token in tokens:
-        # Drop pure numbers
         if RE_DIGITS_ONLY.match(token):
             continue
-
-        # Drop noise tokens only if numeric context exists
         if has_numeric_token and token in NOISE_TOKENS:
             continue
-
         words.append(token)
 
-    # ---- Final canonical spacing ----
-    normalized = " ".join(words)
-    normalized = RE_WHITESPACE.sub(" ", normalized).strip()
+    return " ".join(words)
 
-    return normalized
 
 # ============================================================
-# Field-specific normalization wrappers (v0)
+# Field-specific wrappers (v0)
 # ============================================================
 
 def normalize_artist(value: Optional[str]) -> str:
-    """
-    Normalize artist names for comparison and grouping.
-
-    v0 behavior:
-    - Delegates directly to normalize_text()
-    - No aliasing
-    - No reordering ("Beatles, The")
-    - No article stripping ("the")
-
-    Future versions may add artist-specific rules.
-    """
     return normalize_text(value)
 
 
 def normalize_album_artist(value: Optional[str]) -> str:
-    """
-    Normalize album artist names.
-
-    v0 behavior:
-    - Same as artist normalization
-    - Kept separate for semantic clarity
-    """
     return normalize_text(value)
 
 
 def normalize_album(value: Optional[str]) -> str:
-    """
-    Normalize album titles.
-
-    v0 behavior:
-    - Same base normalization as titles
-    - Conservative by design
-    """
     return normalize_text(value)
 
 
 def normalize_title(value: Optional[str]) -> str:
-    """
-    Normalize track titles.
-
-    v0 behavior:
-    - Same base normalization as albums
-    - Featured artists and subtitles preserved
-    """
     return normalize_text(value)
 
 
 def normalize_genre_token(value: Optional[str]) -> str:
-    """
-    Normalize a single genre token.
-
-    v0 behavior:
-    - Uses base normalization
-    - Token-level normalization only
-    """
     return normalize_text(value)
-

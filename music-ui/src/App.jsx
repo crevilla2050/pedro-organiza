@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import FileTable from "./components/FileTable";
 
+import AliasClusterList from "./components/AliasClusterList";
+
+
 function App() {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -31,6 +34,10 @@ function App() {
             Showing {files.length} files
           </p>
           <FileTable files={files} />
+
+          <hr className="my-4" />
+          
+          <AliasClusterList />
         </>
       )}
     </div>

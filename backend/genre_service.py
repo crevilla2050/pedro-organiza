@@ -177,3 +177,71 @@ def link_file_to_genre(conn, file_id, genre_id, source="tag", confidence=1.0, ap
         "genre_id": genre_id
     }
 
+def genres_for_selection(conn, file_ids):
+    """
+    Compute genre state for a file selection.
+
+    Returns:
+        {
+            "applied":   [ {id, name} ],
+            "partial":   [ {id, name} ],
+            "available": [ {id, name} ]
+        }
+
+    This function is UI-facing and intentionally ignores
+    source/confidence/mappings.
+    """
+    c = conn.cursor()
+
+    if not file_ids:
+        rows = c.execute(
+            "SELECT id, name FROM genres ORDER BY name"
+        ).fetchall()
+
+        return {
+            "applied": [],
+            "partial": [],
+            "available": [dict(r) for r in rows],
+        }
+
+    placeholders = ",".join("?" for _ in file_ids)
+
+    rows = c.execute(
+        f"""
+        WITH hits AS (
+            SELECT
+                fg.genre_id,
+                COUNT(DISTINCT fg.file_id) AS hit_count
+            FROM file_genres fg
+            WHERE fg.file_id IN ({placeholders})
+            GROUP BY fg.genre_id
+        )
+        SELECT
+            g.id,
+            g.name,
+            h.hit_count,
+            ? AS total
+        FROM genres g
+        LEFT JOIN hits h ON h.genre_id = g.id
+        ORDER BY g.name
+        """,
+        (*file_ids, len(file_ids)),
+    ).fetchall()
+
+    applied, partial, available = [], [], []
+
+    for r in rows:
+        genre = {"id": r["id"], "name": r["name"]}
+
+        if r["hit_count"] is None:
+            available.append(genre)
+        elif r["hit_count"] == r["total"]:
+            applied.append(genre)
+        else:
+            partial.append(genre)
+
+    return {
+        "applied": applied,
+        "partial": partial,
+        "available": available,
+    }

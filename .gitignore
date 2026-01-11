@@ -79,6 +79,7 @@ __pycache__/
 *.pyc
 .venv/
 .env
+venv/
 
 # Node / React
 node_modules/
