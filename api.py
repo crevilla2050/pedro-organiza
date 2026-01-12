@@ -31,6 +31,8 @@ from tools.new_pedro_tagger import pedro_enrich_file
 from backend.alias_engine import clusters_as_records
 
 from backend.tag_service import (
+    list_tags,
+    create_tag,
     tags_for_selection,
     apply_tags,
     remove_tags,
@@ -119,21 +121,26 @@ class AliasCluster(BaseModel):
     files: List[AliasClusterFile]
 
 
-# ---------- Selection / Side Panel ----------
+# ---------- Side Panel Payloads ----------
 
 class SelectionPayload(BaseModel):
     entity_type: str
     entity_ids: List[int]
 
 
-class TagMutationPayload(SelectionPayload):
+class TagApplyPayload(SelectionPayload):
     tag_ids: List[int]
 
 
-class GenreMutationPayload(SelectionPayload):
+class GenreApplyPayload(SelectionPayload):
     genre_ids: List[int]
 
-# ===================== ENDPOINTS =====================
+
+class TagCreatePayload(BaseModel):
+    name: str
+    color: Optional[str] = None
+
+# ===================== FILES =====================
 
 @app.get("/files", response_model=List[FileSummary])
 def list_files():
@@ -195,9 +202,8 @@ def list_alias_clusters(
     clusters = clusters_as_records(conn, min_size=min_size)
     conn.close()
 
-    results = []
-    for idx, cluster in enumerate(clusters, start=1):
-        results.append({
+    return [
+        {
             "cluster_id": idx,
             "size": cluster["size"],
             "confidence": cluster.get("confidence"),
@@ -208,27 +214,31 @@ def list_alias_clusters(
             "notes": None,
             "cluster_tags": [],
             "files": cluster["files"],
-        })
-
-    return results
+        }
+        for idx, cluster in enumerate(clusters, start=1)
+    ]
 
 # ===================== SIDE PANEL: TAGS =====================
 
-@app.post("/selection/tags")
-def selection_tags(payload: SelectionPayload):
+@app.get("/side-panel/tags")
+def side_panel_tags(
+    entity_type: str = Query(...),
+    entity_ids: str = Query(""),
+):
+    ids = [int(x) for x in entity_ids.split(",") if x.strip()]
     conn = get_db()
     try:
         return tags_for_selection(
             conn,
-            entity_type=payload.entity_type,
-            entity_ids=payload.entity_ids,
+            entity_type=entity_type,
+            entity_ids=ids,
         )
     finally:
         conn.close()
 
 
-@app.post("/selection/tags/apply")
-def selection_tags_apply(payload: TagMutationPayload):
+@app.post("/side-panel/tags/apply")
+def side_panel_tags_apply(payload: TagApplyPayload):
     conn = get_db()
     try:
         apply_tags(
@@ -237,13 +247,14 @@ def selection_tags_apply(payload: TagMutationPayload):
             entity_ids=payload.entity_ids,
             tag_ids=payload.tag_ids,
         )
-        return {"status": "ok"}
     finally:
         conn.close()
 
+    return {"key": "TAGS_APPLIED"}
 
-@app.post("/selection/tags/remove")
-def selection_tags_remove(payload: TagMutationPayload):
+
+@app.post("/side-panel/tags/remove")
+def side_panel_tags_remove(payload: TagApplyPayload):
     conn = get_db()
     try:
         remove_tags(
@@ -252,27 +263,43 @@ def selection_tags_remove(payload: TagMutationPayload):
             entity_ids=payload.entity_ids,
             tag_ids=payload.tag_ids,
         )
-        return {"status": "ok"}
     finally:
         conn.close()
 
+    return {"key": "TAGS_REMOVED"}
+
+
+@app.post("/side-panel/tags/create")
+def side_panel_tags_create(payload: TagCreatePayload):
+    conn = get_db()
+    try:
+        tag = create_tag(conn, payload.name, payload.color)
+    finally:
+        conn.close()
+
+    return {"key": "TAG_CREATED", "tag": tag}
+
 # ===================== SIDE PANEL: GENRES =====================
 
-@app.post("/selection/genres")
-def selection_genres(payload: SelectionPayload):
+@app.get("/side-panel/genres")
+def side_panel_genres(
+    entity_type: str = Query("file"),
+    entity_ids: str = Query(""),
+):
+    ids = [int(x) for x in entity_ids.split(",") if x.strip()]
     conn = get_db()
     try:
         return genres_for_selection(
             conn,
-            entity_type=payload.entity_type,
-            entity_ids=payload.entity_ids,
+            entity_type=entity_type,
+            entity_ids=ids,
         )
     finally:
         conn.close()
 
 
-@app.post("/selection/genres/apply")
-def selection_genres_apply(payload: GenreMutationPayload):
+@app.post("/side-panel/genres/apply")
+def side_panel_genres_apply(payload: GenreApplyPayload):
     conn = get_db()
     try:
         apply_genres(
@@ -281,13 +308,14 @@ def selection_genres_apply(payload: GenreMutationPayload):
             entity_ids=payload.entity_ids,
             genre_ids=payload.genre_ids,
         )
-        return {"status": "ok"}
     finally:
         conn.close()
 
+    return {"key": "GENRES_APPLIED"}
 
-@app.post("/selection/genres/remove")
-def selection_genres_remove(payload: GenreMutationPayload):
+
+@app.post("/side-panel/genres/remove")
+def side_panel_genres_remove(payload: GenreApplyPayload):
     conn = get_db()
     try:
         remove_genres(
@@ -296,8 +324,9 @@ def selection_genres_remove(payload: GenreMutationPayload):
             entity_ids=payload.entity_ids,
             genre_ids=payload.genre_ids,
         )
-        return {"status": "ok"}
     finally:
         conn.close()
+
+    return {"key": "GENRES_REMOVED"}
 
 # ===================== END =====================

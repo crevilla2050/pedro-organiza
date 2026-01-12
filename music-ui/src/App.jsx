@@ -9,7 +9,7 @@ function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch("http://127.0.0.1:8000/files?limit=200")
+    fetch("http://127.0.0.1:8000/files")
       .then(res => res.json())
       .then(data => {
         setFiles(data);
