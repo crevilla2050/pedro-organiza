@@ -24,14 +24,16 @@ from typing import List, Optional, Dict, Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi import Request
+from fastapi.responses import StreamingResponse
+import mimetypes
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 from tools.new_pedro_tagger import pedro_enrich_file
 from backend.alias_engine import clusters_as_records
 
 from backend.tag_service import (
-    list_tags,
     create_tag,
     tags_for_selection,
     apply_tags,
@@ -40,8 +42,7 @@ from backend.tag_service import (
 
 from backend.genre_service import (
     genres_for_selection,
-    apply_genres,
-    remove_genres,
+    link_file_to_genre,
 )
 
 # ===================== ENV =====================
@@ -93,7 +94,7 @@ class EnrichmentResult(BaseModel):
     confidence: float
     source: str
     notes: Optional[str] = None
-    tags: Optional[dict] = None
+    tags: Optional[Dict[str, Any]] = None
 
 
 # ---------- Alias Clusters ----------
@@ -116,9 +117,9 @@ class AliasCluster(BaseModel):
     resolution_status: str = "unresolved"
     user_decision: Optional[Any] = None
     notes: Optional[str] = None
-    cluster_tags: List[str] = []
+    cluster_tags: List[str] = Field(default_factory=list)
 
-    files: List[AliasClusterFile]
+    files: List[AliasClusterFile] = Field(default_factory=list)
 
 
 # ---------- Side Panel Payloads ----------
@@ -163,6 +164,96 @@ def list_files():
 
     return [FileSummary(**dict(r)) for r in rows]
 
+
+# ===================== AUDIO STREAMING =====================
+
+@app.get("/audio/{file_id}")
+def stream_audio(file_id: int, request: Request):
+    conn = get_db()
+    row = conn.execute(
+        "SELECT original_path FROM files WHERE id = ?",
+        (file_id,),
+    ).fetchone()
+    conn.close()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="FILE_NOT_FOUND")
+
+    path = row["original_path"]
+
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="FILE_MISSING")
+
+    file_size = os.path.getsize(path)
+    range_header = request.headers.get("range")
+
+    content_type, _ = mimetypes.guess_type(path)
+    content_type = content_type or "audio/mpeg"
+
+    def open_file(start=0, end=None):
+        with open(path, "rb") as f:
+            f.seek(start)
+            remaining = (end - start + 1) if end else file_size - start
+            while remaining > 0:
+                chunk = f.read(min(8192, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+
+    # ---------- RANGE REQUEST (CRITICAL FOR BROWSERS) ----------
+    if range_header:
+        units, range_spec = range_header.split("=")
+        start_str, end_str = range_spec.split("-")
+
+        start = int(start_str)
+        end = int(end_str) if end_str else file_size - 1
+
+        headers = {
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(end - start + 1),
+            "Content-Type": content_type,
+        }
+
+        return StreamingResponse(
+            open_file(start, end),
+            status_code=206,
+            headers=headers,
+            media_type=content_type,
+        )
+
+    # ---------- FULL FILE FALLBACK ----------
+    headers = {
+        "Content-Length": str(file_size),
+        "Accept-Ranges": "bytes",
+        "Content-Type": content_type,
+    }
+
+    return StreamingResponse(
+        open_file(),
+        headers=headers,
+        media_type=content_type,
+    )
+
+# ====================== AUDIO HEADERS CHECK =====================
+
+@app.head("/audio/{file_id}")
+def head_audio(file_id: int):
+    conn = get_db()
+    row = conn.execute(
+        "SELECT original_path FROM files WHERE id = ?",
+        (file_id,),
+    ).fetchone()
+    conn.close()
+
+    if not row or not os.path.exists(row["original_path"]):
+        raise HTTPException(status_code=404)
+
+    return {}
+
+
+# ===================== FILE ENRICHMENT =====================
 
 @app.post("/files/{file_id}/enrich", response_model=EnrichmentResult)
 def enrich_file(file_id: int):
@@ -289,11 +380,10 @@ def side_panel_genres(
     ids = [int(x) for x in entity_ids.split(",") if x.strip()]
     conn = get_db()
     try:
-        return genres_for_selection(
-            conn,
-            entity_type=entity_type,
-            entity_ids=ids,
-        )
+        if entity_type != "file":
+            raise HTTPException(status_code=400, detail="UNSUPPORTED_ENTITY_FOR_GENRES")
+
+        return genres_for_selection(conn, ids)
     finally:
         conn.close()
 
@@ -302,12 +392,14 @@ def side_panel_genres(
 def side_panel_genres_apply(payload: GenreApplyPayload):
     conn = get_db()
     try:
-        apply_genres(
-            conn,
-            entity_type=payload.entity_type,
-            entity_ids=payload.entity_ids,
-            genre_ids=payload.genre_ids,
-        )
+        if payload.entity_type != "file":
+            raise HTTPException(status_code=400, detail="UNSUPPORTED_ENTITY_FOR_GENRES")
+
+        # Link each file to each genre
+        for gid in payload.genre_ids:
+            for fid in payload.entity_ids:
+                link_file_to_genre(conn, fid, gid, source="tag", confidence=1.0, apply=True)
+        conn.commit()
     finally:
         conn.close()
 
@@ -318,12 +410,21 @@ def side_panel_genres_apply(payload: GenreApplyPayload):
 def side_panel_genres_remove(payload: GenreApplyPayload):
     conn = get_db()
     try:
-        remove_genres(
-            conn,
-            entity_type=payload.entity_type,
-            entity_ids=payload.entity_ids,
-            genre_ids=payload.genre_ids,
+        if payload.entity_type != "file":
+            raise HTTPException(status_code=400, detail="UNSUPPORTED_ENTITY_FOR_GENRES")
+
+        if not payload.entity_ids or not payload.genre_ids:
+            return
+
+        conn.execute(
+            f"""
+            DELETE FROM file_genres
+            WHERE file_id IN ({','.join('?' for _ in payload.entity_ids)})
+              AND genre_id IN ({','.join('?' for _ in payload.genre_ids)})
+            """,
+            (*payload.entity_ids, *payload.genre_ids),
         )
+        conn.commit()
     finally:
         conn.close()
 

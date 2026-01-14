@@ -13,3 +13,9 @@ pedro = "cli.pedro_cli:main"
 [tool.setuptools]
 packages = ["cli"]
 
+[tool.ruff]
+line-length = 88
+target-version = "py39"
+exclude = ["build", "dist", ".venv", "__pycache__"]
+
+

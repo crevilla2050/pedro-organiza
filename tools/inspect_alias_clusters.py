@@ -30,7 +30,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from backend.alias_engine import (
     build_alias_clusters,
-    clusters_as_records,
     get_cluster_for_file,
 )
 

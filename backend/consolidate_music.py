@@ -34,7 +34,6 @@ consume the DB created/updated by this module.
 """
 
 import os
-import io
 import sqlite3
 import hashlib
 import subprocess
@@ -46,7 +45,6 @@ from pathlib import Path
 
 from mutagen import File as MutagenFile
 from dotenv import load_dotenv
-from PIL import Image
 from normalization import normalize_text
 
 
@@ -443,7 +441,7 @@ def ensure_alias_views(c):
            OR confidence_score >= 1.5
     """)
 
-        # --- Strong edges WITH signal types (for analysis) ---
+    # --- Strong edges WITH signal types (for analysis) ---
     c.execute("""
         CREATE VIEW IF NOT EXISTS alias_edges_with_signals AS
         SELECT

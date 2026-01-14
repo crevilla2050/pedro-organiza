@@ -16,7 +16,6 @@ returns message keys (i18n) and structured data so callers can localize
 messages and present results in a UI.
 """
 
-import sqlite3
 import re
 from datetime import datetime, timezone
 
@@ -177,7 +176,8 @@ def link_file_to_genre(conn, file_id, genre_id, source="tag", confidence=1.0, ap
         "genre_id": genre_id
     }
 
-def genres_for_selection(conn, file_ids):
+def genres_for_selection(conn, file_ids: list[int]):
+
     """
     Compute genre state for a file selection.
 
