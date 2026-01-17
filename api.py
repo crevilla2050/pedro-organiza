@@ -19,6 +19,7 @@ Rules:
 
 import os
 import sqlite3
+import json
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 
@@ -141,6 +142,10 @@ class TagCreatePayload(BaseModel):
     name: str
     color: Optional[str] = None
 
+class SortKey(BaseModel):
+    field: str
+    direction: str  # "asc" | "desc"
+
 # ===================== FILES =====================
 
 @app.get("/files", response_model=List[FileSummary])
@@ -163,6 +168,127 @@ def list_files():
     conn.close()
 
     return [FileSummary(**dict(r)) for r in rows]
+
+
+@app.get("/files/search", response_model=List[FileSummary])
+def search_files(
+    q: Optional[str] = Query(None, description="Search term"),
+    field: str = Query("artist", regex="^(artist|album|title)$"),
+
+    strict: bool = Query(False),
+    case_sensitive: bool = Query(False),
+
+    starts_with: Optional[str] = Query(None, description="A-Z or #"),
+    sort_by: Optional[str] = Query(None, regex="^(artist|album|title)$"),
+
+    max_results: Optional[int] = Query(None, ge=1),
+):
+    conn = get_db()
+
+    where_clauses = []
+    params = []
+
+    col = field
+
+    # ---------------------------
+    # TEXT SEARCH
+    # ---------------------------
+    if q:
+        if strict:
+            # STRICT MODE
+            if "*" in q or "?" in q:
+                # Wildcard search
+                if case_sensitive:
+                    where_clauses.append(f"{col} GLOB ?")
+                    params.append(q)
+                else:
+                    where_clauses.append(f"UPPER({col}) GLOB UPPER(?)")
+                    params.append(q)
+            else:
+                # Exact match
+                where_clauses.append(f"{col} = ?")
+                params.append(q)
+        else:
+            # FLEXIBLE MODE (substring search)
+            if case_sensitive:
+                where_clauses.append(f"{col} LIKE ?")
+                params.append(f"%{q}%")
+            else:
+                where_clauses.append(f"{col} LIKE ? COLLATE NOCASE")
+                params.append(f"%{q}%")
+
+    # ---------------------------
+    # ALPHABET FILTER
+    # ---------------------------
+    if starts_with:
+        if starts_with == "#":
+            where_clauses.append(f"{col} GLOB '[0-9]*'")
+        else:
+            where_clauses.append(f"{col} LIKE ? COLLATE NOCASE")
+            params.append(f"{starts_with}%")
+
+    # ---------------------------
+    # SQL ASSEMBLY
+    # ---------------------------
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+    order_sql = ""
+    if sort_by:
+        order_sql = f"ORDER BY {sort_by} COLLATE NOCASE"
+
+    limit_sql = ""
+    if max_results:
+        limit_sql = "LIMIT ?"
+        params.append(max_results)
+
+    sql = f"""
+        SELECT
+            id,
+            original_path,
+            artist,
+            album_artist,
+            album,
+            title
+        FROM files
+        {where_sql}
+        {order_sql}
+        {limit_sql}
+    """
+
+    rows = conn.execute(sql, params).fetchall()
+    conn.close()
+
+    return [FileSummary(**dict(r)) for r in rows]
+
+
+@app.get("/files/{file_id}", response_model=FileSummary)
+def get_file(file_id: int):
+    """
+    Fetch a single file by ID.
+    Used for row refresh, playback sync, and post-write updates.
+    """
+
+    conn = get_db()
+    row = conn.execute(
+        """
+        SELECT
+            id,
+            original_path,
+            artist,
+            album_artist,
+            album,
+            title
+        FROM files
+        WHERE id = ?
+        """,
+        (file_id,),
+    ).fetchone()
+    conn.close()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="FILE_NOT_FOUND")
+
+    return FileSummary(**dict(row))
 
 
 # ===================== AUDIO STREAMING =====================
