@@ -1,80 +1,137 @@
 import { useState } from "react";
 import { PlaybackProvider } from "./context/PlaybackContext";
 import FileTable from "./components/FileTable";
+import { t } from "./i18n";
 
-const EMPTY_FILTERS = {
-  q: "",
-  field: "artist",      // artist | album | title
-  startsWith: null,     // "A".."Z" | "#"
-  strict: false,
-  caseSensitive: false,
-};
+const API_BASE = "http://127.0.0.1:8000";
+
+/* ===================== HELPERS ===================== */
+
+function buildSortParam(sortState) {
+  // sortState example:
+  // [
+  //   { field: "artist", dir: "asc", locked: true },
+  //   { field: "album", dir: "asc", locked: false }
+  // ]
+
+  if (!sortState.length) return null;
+
+  return sortState
+    .map(s => `${s.field}:${s.dir}`)
+    .join(",");
+}
+
+function hasActiveFilters(filters) {
+  return Boolean(
+    filters.q ||
+    filters.starts_with
+  );
+}
+
+/* ===================== APP ===================== */
 
 export default function App() {
-  /* ===================== SIDE PANEL UI STATE ===================== */
-
+  /* ===== side panel UI ===== */
   const [panelSide, setPanelSide] = useState("left");
   const [panelOpen, setPanelOpen] = useState(true);
 
-  /* ===================== SEARCH STATE ===================== */
-
-  const [filters, setFilters] = useState(EMPTY_FILTERS);
+  /* ===== search + data ===== */
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false);
+  const [error, setError] = useState(null);
 
-  /* ===================== SEARCH ENGINE ===================== */
+  /* ===== filters ===== */
+  const [filters, setFilters] = useState({
+    q: "",
+    field: "artist",        // artist | album | title
+    starts_with: null,      // A–Z | #
+  });
 
-  const runSearch = async (next = {}) => {
-    const f = { ...filters, ...next };
-    setFilters(f);
+  /* ===== sorting ===== */
+  const [sortState, setSortState] = useState([
+    { field: "artist", dir: "asc", locked: true },
+    { field: "album", dir: "asc", locked: false },
+    { field: "title", dir: "asc", locked: false },
+  ]);
 
-    const isEmpty =
-      !f.q &&
-      !f.startsWith &&
-      !f.strict &&
-      !f.caseSensitive;
+  /* ===================== SEARCH CORE ===================== */
 
-    // 🚨 CRITICAL RULE:
-    // Empty filters = IDLE STATE (NO SEARCH)
-    if (isEmpty) {
+  const runSearch = async (nextFilters = filters) => {
+    if (!hasActiveFilters(nextFilters)) {
       setFiles([]);
-      setHasSearched(false);
       return;
     }
 
-    setHasSearched(true);
     setLoading(true);
+    setError(null);
 
     try {
       const params = new URLSearchParams();
 
-      if (f.q) params.append("q", f.q);
-      if (f.field) params.append("field", f.field);
-      if (f.startsWith) params.append("starts_with", f.startsWith);
-      if (f.strict) params.append("strict", "true");
-      if (f.caseSensitive) params.append("case_sensitive", "true");
+      if (nextFilters.q) {
+        params.set("q", nextFilters.q);
+        params.set("field", nextFilters.field);
+      }
+
+      if (nextFilters.starts_with) {
+        params.set("field", nextFilters.field);
+        params.set("starts_with", nextFilters.starts_with);
+      }
+
+      const sortParam = buildSortParam(sortState);
+      if (sortParam) {
+        params.set("sort", sortParam);
+      }
 
       const res = await fetch(
-        `http://127.0.0.1:8000/files/search?${params.toString()}`
+        `${API_BASE}/files/search?${params.toString()}`
       );
 
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
 
       const data = await res.json();
       setFiles(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error("Search failed:", err);
+      setError(t("ERROR_GENERIC"));
       setFiles([]);
     } finally {
       setLoading(false);
     }
   };
 
+  /* ===================== FILTER ACTIONS ===================== */
+
+  const applyTextSearch = ({ q, field }) => {
+    const next = {
+      q,
+      field,
+      starts_with: null,
+    };
+    setFilters(next);
+    runSearch(next);
+  };
+
+  const applyAlpha = (letter) => {
+    const next = {
+      q: "",
+      field: filters.field,
+      starts_with: letter,
+    };
+    setFilters(next);
+    runSearch(next);
+  };
+
   const clearFilters = () => {
-    setFilters(EMPTY_FILTERS);
+    setFilters({
+      q: "",
+      field: filters.field,
+      starts_with: null,
+    });
     setFiles([]);
-    setHasSearched(false);
+    setError(null);
   };
 
   /* ===================== RENDER ===================== */
@@ -87,8 +144,6 @@ export default function App() {
           height: "100%",
           display: "flex",
           flexDirection: panelSide === "left" ? "row" : "row-reverse",
-          background: "var(--color-bg-primary)",
-          color: "var(--color-text-primary)",
         }}
       >
         {/* ================= SIDE PANEL ================= */}
@@ -97,45 +152,65 @@ export default function App() {
           style={{
             width: panelOpen ? 260 : 20,
             minWidth: panelOpen ? 260 : 20,
-            background: "var(--color-bg-secondary)",
-            borderRight:
-              panelSide === "left" ? "1px solid var(--color-border)" : "none",
-            borderLeft:
-              panelSide === "right" ? "1px solid var(--color-border)" : "none",
-            display: "flex",
-            flexDirection: "column",
           }}
         >
-          <div
-            style={{
-              padding: panelOpen ? 16 : 6,
-              display: "flex",
-              justifyContent: "center",
-              borderBottom: "1px solid var(--color-divider)",
-            }}
-          >
+          {/* Logo */}
+          <div className="side-panel-logo">
             <img
               src="/assets/logo_web.png"
               alt="Pedro Organiza"
-              style={{
-                width: panelOpen ? 120 : 16,
-                transition: "width 0.25s ease",
-              }}
+              style={{ width: panelOpen ? 120 : 16 }}
             />
+          </div>
+
+          {/* Controls */}
+          {panelOpen && (
+            <div className="side-panel-controls">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={panelSide === "right"}
+                  onChange={(e) =>
+                    setPanelSide(e.target.checked ? "right" : "left")
+                  }
+                />
+                Panel on right
+              </label>
+
+              <label>
+                <input
+                  type="checkbox"
+                  checked={panelOpen}
+                  onChange={(e) => setPanelOpen(e.target.checked)}
+                />
+                Panel visible
+              </label>
+            </div>
+          )}
+
+          <div style={{ flex: 1 }} />
+
+          {/* Mini player (mock) */}
+          <div className="mini-player">
+            <button>⏮</button>
+            <button>▶</button>
+            <button>⏭</button>
           </div>
         </aside>
 
         {/* ================= MAIN ================= */}
-        <div className="main-content" style={{ flex: 1, minWidth: 0 }}>
+        <main className="main-content" style={{ flex: 1, minWidth: 0 }}>
           <FileTable
             files={files}
-            filters={filters}
             loading={loading}
-            hasSearched={hasSearched}
-            onSearch={runSearch}
-            onClear={clearFilters}
+            error={error}
+            filters={filters}
+            setFilters={setFilters}
+            onApplySearch={applyTextSearch}
+            onAlpha={applyAlpha}
+            onClearFilters={clearFilters}
           />
-        </div>
+        </main>
       </div>
     </PlaybackProvider>
   );

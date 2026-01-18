@@ -170,71 +170,126 @@ def list_files():
     return [FileSummary(**dict(r)) for r in rows]
 
 
+def build_order_by(sort_param: Optional[str]) -> str:
+    """
+    Build a robust ORDER BY clause from a sort string like:
+    artist:asc,album:desc
+    """
+
+    if not sort_param:
+        return "ORDER BY artist COLLATE NOCASE ASC"
+
+    VALID_FIELDS = {
+        "artist",
+        "album",
+        "title",
+        "year",
+        "track",
+        "disc",
+    }
+
+    clauses = []
+
+    for part in sort_param.split(","):
+        try:
+            field, direction = part.split(":")
+        except ValueError:
+            continue
+
+        field = field.strip()
+        direction = direction.strip().upper()
+
+        if field not in VALID_FIELDS:
+            continue
+
+        if direction not in ("ASC", "DESC"):
+            direction = "ASC"
+
+        # NULLs last, case-insensitive
+        clauses.append(f"{field} IS NULL")
+        clauses.append(f"{field} COLLATE NOCASE {direction}")
+
+    if not clauses:
+        return "ORDER BY artist COLLATE NOCASE ASC"
+
+    return "ORDER BY " + ", ".join(clauses)
+
+
 @app.get("/files/search", response_model=List[FileSummary])
 def search_files(
-    q: Optional[str] = Query(None, description="Search term"),
+    q: Optional[str] = Query(None),
     field: str = Query("artist", regex="^(artist|album|title)$"),
-
+    starts_with: Optional[str] = Query(None),
     strict: bool = Query(False),
     case_sensitive: bool = Query(False),
-
-    starts_with: Optional[str] = Query(None, description="A-Z or #"),
+    wildcards: bool = Query(False),
     sort_by: Optional[str] = Query(None, regex="^(artist|album|title)$"),
-
+    sort_dir: str = Query("asc", regex="^(asc|desc)$"),
     max_results: Optional[int] = Query(None, ge=1),
+    sort: Optional[str] = Query(None),
 ):
     conn = get_db()
+
+    VALID_FIELDS = {"artist", "album", "title"}
+
+    if field not in VALID_FIELDS:
+        raise HTTPException(status_code=400, detail="INVALID_FIELD")
+
+    if sort_by and sort_by not in VALID_FIELDS:
+        raise HTTPException(status_code=400, detail="INVALID_SORT_FIELD")
 
     where_clauses = []
     params = []
 
-    col = field
+    column = field
 
-    # ---------------------------
-    # TEXT SEARCH
-    # ---------------------------
-    if q:
-        if strict:
-            # STRICT MODE
-            if "*" in q or "?" in q:
-                # Wildcard search
-                if case_sensitive:
-                    where_clauses.append(f"{col} GLOB ?")
-                    params.append(q)
-                else:
-                    where_clauses.append(f"UPPER({col}) GLOB UPPER(?)")
-                    params.append(q)
-            else:
-                # Exact match
-                where_clauses.append(f"{col} = ?")
-                params.append(q)
-        else:
-            # FLEXIBLE MODE (substring search)
-            if case_sensitive:
-                where_clauses.append(f"{col} LIKE ?")
-                params.append(f"%{q}%")
-            else:
-                where_clauses.append(f"{col} LIKE ? COLLATE NOCASE")
-                params.append(f"%{q}%")
-
-    # ---------------------------
-    # ALPHABET FILTER
-    # ---------------------------
+    # ======================================================
+    # ALPHABET FILTER (OVERRIDES q COMPLETELY)
+    # ======================================================
     if starts_with:
         if starts_with == "#":
-            where_clauses.append(f"{col} GLOB '[0-9]*'")
+            where_clauses.append(
+                f"{column} IS NOT NULL AND {column} GLOB '[^A-Za-z]*'"
+            )
         else:
-            where_clauses.append(f"{col} LIKE ? COLLATE NOCASE")
+            where_clauses.append(
+                f"{column} IS NOT NULL AND LOWER({column}) LIKE LOWER(?)"
+            )
             params.append(f"{starts_with}%")
 
-    # ---------------------------
-    # SQL ASSEMBLY
-    # ---------------------------
-    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    # ======================================================
+    # TEXT SEARCH (ONLY IF NO starts_with)
+    # ======================================================
+    elif q:
+        if wildcards:
+            pattern = q.replace("*", "%").replace("?", "_")
+        else:
+            pattern = q
 
-    order_sql = ""
-    if sort_by:
-        order_sql = f"ORDER BY {sort_by} COLLATE NOCASE"
+        if strict:
+            op = "="
+            value = pattern
+        else:
+            op = "LIKE"
+            value = f"%{pattern}%"
+
+        if case_sensitive:
+            where_clauses.append(f"{column} {op} ?")
+        else:
+            where_clauses.append(f"LOWER({column}) {op} LOWER(?)")
+
+        params.append(value)
+
+    # ======================================================
+    # BUILD SQL
+    # ======================================================
+    where_sql = (
+        f"WHERE {' AND '.join(where_clauses)}"
+        if where_clauses
+        else ""
+    )
+
+    order_sql = build_order_by(sort)
 
     limit_sql = ""
     if max_results:
@@ -252,7 +307,6 @@ def search_files(
         FROM files
         {where_sql}
         {order_sql}
-        {limit_sql}
     """
 
     rows = conn.execute(sql, params).fetchall()
@@ -260,6 +314,9 @@ def search_files(
 
     return [FileSummary(**dict(r)) for r in rows]
 
+
+
+# ===================== SINGLE FILE =====================
 
 @app.get("/files/{file_id}", response_model=FileSummary)
 def get_file(file_id: int):
