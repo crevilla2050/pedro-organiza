@@ -1,35 +1,83 @@
-import { useState, Fragment, useReducer, useEffect } from "react";
+import { useState, Fragment } from "react";
 import { usePlayback } from "../context/PlaybackContext";
-import { sortReducer, DEFAULT_SORT_STACK } from "../reducers/sortReducer";
 
 const API_BASE = "http://127.0.0.1:8000";
 
 export default function FileTable() {
   /* ===================== PLAYBACK ===================== */
-  const { playTrack, pause, seekBy, playing, currentTrackId } = usePlayback();
 
-  /* ===================== SORT ===================== */
-  const [sortStack, dispatchSort] = useReducer(
-    sortReducer,
-    DEFAULT_SORT_STACK
-  );
+  const {
+    playTrack,
+    pause,
+    seekBy,
+    playing,
+    currentTrackId,
+  } = usePlayback();
 
-  const sortParam = sortStack
-    .map(k => `${k.field}:${k.dir}`)
-    .join(",");
+  /* ===================== FILTER STATE ===================== */
 
-  /* ===================== FILTER ===================== */
   const [searchText, setSearchText] = useState("");
   const [searchField, setSearchField] = useState("artist");
-
-  /* ===================== DATA ===================== */
   const [rows, setRows] = useState([]);
+  const [showLegend, setShowLegend] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [showLegend, setShowLegend] = useState(true);
 
-  /* ===================== SELECTION ===================== */
+  /* ===================== SELECTION STATE ===================== */
+
   const [selectedIds, setSelectedIds] = useState(new Set());
+  const [edits, setEdits] = useState({});
+  const [bulkEdit, setBulkEdit] = useState({ disc: "" });
+
+  /* ---------- Derived selection ---------- */
+
+  const selectedCount = selectedIds.size;
+  const singleSelectedId =
+    selectedCount === 1 ? Array.from(selectedIds)[0] : null;
+  const bulkSelectedIds =
+    selectedCount >= 2 ? Array.from(selectedIds) : [];
+
+  const bulkEnabled = bulkSelectedIds.length >= 2;
+
+  /* ===================== SEARCH CORE ===================== */
+
+  const runSearch = async ({ q, field, startsWith = null }) => {
+    if (!q && !startsWith) {
+      setRows([]);
+      setShowLegend(true);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setShowLegend(false);
+    setSelectedIds(new Set());
+    setEdits({});
+
+    try {
+      let url = `${API_BASE}/files/search?field=${field}`;
+
+      if (startsWith) {
+        url += `&starts_with=${encodeURIComponent(startsWith)}`;
+      } else if (q) {
+        url += `&q=${encodeURIComponent(q)}`;
+      }
+
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const data = await res.json();
+      setRows(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error("Search failed:", err);
+      setError("Search failed");
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /* ===================== UI HANDLERS ===================== */
 
   const toggleSelect = (id) => {
     setSelectedIds(prev => {
@@ -39,68 +87,62 @@ export default function FileTable() {
     });
   };
 
-  /* ===================== SEARCH ===================== */
-  const runSearch = async ({ q, field, startsWith } = {}) => {
-    setLoading(true);
-    setError(null);
-    setShowLegend(false);
-
-    const params = new URLSearchParams();
-    if (q) params.set("q", q);
-    if (field) params.set("field", field);
-    if (startsWith) params.set("starts_with", startsWith);
-    params.set("sort", sortParam);
-
-    try {
-      const res = await fetch(`${API_BASE}/files/search?${params}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setRows(Array.isArray(data) ? data : []);
-    } catch (err) {
-      setError("Search failed");
-      setRows([]);
-    } finally {
-      setLoading(false);
-    }
+  const updateEdit = (id, field, value) => {
+    setEdits(prev => ({
+      ...prev,
+      [id]: {
+        ...(prev[id] || {}),
+        [field]: value,
+      },
+    }));
   };
 
-  /* re-run search when sort changes */
-  useEffect(() => {
-    if (!showLegend) {
-      runSearch({ q: searchText, field: searchField });
-    }
-  }, [sortStack]);
+  /* ===================== DIRTY STATE ===================== */
 
-  /* ===================== HEADER CELL ===================== */
-  const HeaderCell = ({ field, label }) => {
-    const key = sortStack.find(k => k.field === field);
+  const isRowDirty = (row) => {
+    const edit = edits[row.id];
+    if (!edit) return false;
 
-    return (
-      <div className="col-text header-cell">
-        <span
-          onClick={() => dispatchSort({ type: "CLICK_COLUMN", field })}
-          style={{ cursor: "pointer" }}
-        >
-          {label} {key?.dir === "asc" ? "▲" : "▼"}
-        </span>
-        <input
-          type="checkbox"
-          checked={key?.locked || false}
-          onChange={() => dispatchSort({ type: "TOGGLE_LOCK", field })}
-          title="Lock sort level"
-        />
-      </div>
+    return Object.keys(edit).some(
+      key => (edit[key] ?? "") !== (row[key] ?? "")
     );
   };
 
+  const onApply = () => {
+    runSearch({ q: searchText, field: searchField });
+  };
+
+  const onAlphaClick = (letter) => {
+    runSearch({ field: searchField, startsWith: letter });
+  };
+
+  const onFieldChange = (e) => {
+    const newField = e.target.value;
+    setSearchField(newField);
+
+    if (searchText) {
+      runSearch({ q: searchText, field: newField });
+    }
+  };
+
+  const onClearFilters = () => {
+    setSearchText("");
+    setRows([]);
+    setShowLegend(true);
+    setError(null);
+    setSelectedIds(new Set());
+    setEdits({});
+  };
+
   /* ===================== RENDER ===================== */
+
   return (
     <div className="file-table-root">
 
-      {/* FILTER BAR */}
+      {/* ================= FILTER BAR ================= */}
       <div className="pedro-sticky-filter">
         <div className="filter-row">
-          <select value={searchField} onChange={e => setSearchField(e.target.value)}>
+          <select value={searchField} onChange={onFieldChange}>
             <option value="artist">Artist</option>
             <option value="album">Album</option>
             <option value="title">Title</option>
@@ -108,86 +150,236 @@ export default function FileTable() {
 
           <input
             value={searchText}
-            onChange={e => setSearchText(e.target.value)}
+            onChange={(e) => setSearchText(e.target.value)}
             placeholder="Search…"
-            onKeyDown={e => e.key === "Enter" && runSearch({ q: searchText, field: searchField })}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onApply();
+            }}
           />
 
-          <button onClick={() => runSearch({ q: searchText, field: searchField })}>
+          <button
+            className="btn btn-primary"
+            onClick={onApply}
+            disabled={!searchText}
+          >
             Apply
           </button>
         </div>
 
         <div className="filter-row alpha">
-          {"ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map(l => (
-            <button key={l} onClick={() => runSearch({ startsWith: l, field: searchField })}>
-              {l}
+          {"ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map(letter => (
+            <button
+              key={letter}
+              className="btn btn-sm btn-outline-dark"
+              onClick={() => onAlphaClick(letter)}
+            >
+              {letter}
             </button>
           ))}
-          <button onClick={() => runSearch({ startsWith: "#", field: searchField })}>#</button>
+
+          <button
+            className="btn btn-sm btn-outline-dark"
+            onClick={() => onAlphaClick("#")}
+          >
+            #
+          </button>
+
+          <div className="spacer" />
+
+          <button
+            className="btn btn-sm btn-outline-secondary"
+            onClick={onClearFilters}
+          >
+            Clear filters
+          </button>
         </div>
       </div>
 
-      {/* TABLE HEADER */}
-      <div className="pedro-sticky-header table-header">
-        <div className="col-check">
+      {/* ================= BULK EDIT BAR ================= */}
+      <div className={`pedro-sticky-bulk ${bulkEnabled ? "" : "disabled"}`}>
+        <div className="bulk-row primary">
+          <input placeholder="Artist" disabled={!bulkEnabled} />
+          <input placeholder="Album" disabled={!bulkEnabled} />
+          <input placeholder="Album Artist" disabled={!bulkEnabled} />
+          <input placeholder="Year" disabled={!bulkEnabled} />
+          <input placeholder="BPM" disabled={!bulkEnabled} />
           <input
-            type="checkbox"
-            checked={rows.length > 0 && selectedIds.size === rows.length}
-            onChange={() => {
-              if (selectedIds.size === rows.length) {
-                setSelectedIds(new Set());
-              } else {
-                setSelectedIds(new Set(rows.map(r => r.id)));
-              }
-            }}
+            placeholder="Disc #"
+            disabled={!bulkEnabled}
+            value={bulkEdit.disc}
+            onChange={e =>
+              setBulkEdit(p => ({ ...p, disc: e.target.value }))
+            }
           />
         </div>
+
+        <div className="bulk-row secondary">
+          <label>
+            <input type="checkbox" disabled={!bulkEnabled} />
+            Compilation
+          </label>
+
+          <label className="mark-delete">
+            <input type="checkbox" disabled={!bulkEnabled} />
+            Mark for deletion
+          </label>
+
+          <button disabled={!bulkEnabled}>Apply</button>
+        </div>
+      </div>
+
+      {/* ================= TABLE HEADER ================= */}
+      <div className="pedro-sticky-header table-header">
+        <div className="col-check" />
         <div className="col-id">ID</div>
-        <HeaderCell field="artist" label="Artist" />
-        <HeaderCell field="title" label="Title" />
-        <HeaderCell field="album" label="Album" />
+        <div className="col-text">Artist</div>
+        <div className="col-text">Title</div>
+        <div className="col-text">Album</div>
         <div className="col-preview">Preview</div>
       </div>
 
-      {/* BODY */}
+      {/* ================= BODY ================= */}
       <div className="pedro-scroll-body">
+
         {showLegend && (
           <div className="table-hint">
             <strong>35k+</strong> files found — please refine your search
           </div>
         )}
 
-        {loading && <div className="table-hint">Searching…</div>}
-        {error && <div className="table-error">{error}</div>}
+        {loading && (
+          <div className="table-hint">Searching…</div>
+        )}
+
+        {error && (
+          <div className="table-error">{error}</div>
+        )}
 
         {!loading && rows.length > 0 && (
           <table>
             <tbody>
               {rows.map(row => {
-                const isPlaying = currentTrackId === row.id && playing;
+                const isSelected = selectedIds.has(row.id);
+                const isExpanded = row.id === singleSelectedId;
+                const edit = edits[row.id] || {};
+                const isPlaying =
+                  currentTrackId === row.id && playing;
 
                 return (
-                  <tr key={row.id}>
-                    <td className="col-check">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.has(row.id)}
-                        onChange={() => toggleSelect(row.id)}
-                      />
-                    </td>
-                    <td className="col-id">{row.id}</td>
-                    <td className="col-text">{row.artist || "—"}</td>
-                    <td className="col-text">{row.title || "—"}</td>
-                    <td className="col-text">{row.album || "—"}</td>
-                    <td className="col-preview">
-                      <button onClick={() => isPlaying ? pause() : playTrack(row.id, { preview: true })}>
-                        {isPlaying ? "❚❚" : "▶"}
-                      </button>
-                      <button onClick={() => seekBy(-10)}>−10</button>
-                      <button onClick={() => seekBy(10)}>+10</button>
-                    </td>
-                  </tr>
+                  <Fragment key={row.id}>
+                    <tr
+                      className={[
+                        isSelected ? "row-selected" : "",
+                        isRowDirty(row) ? "row-dirty" : "",
+                      ].join(" ")}
+                    >
+                      <td className="col-check">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleSelect(row.id)}
+                        />
+                      </td>
+
+                      <td className="col-id">
+                        {row.id}
+                        {isRowDirty(row) && (
+                          <span className="dirty-star">*</span>
+                        )}
+                      </td>
+
+                      {["artist", "title", "album"].map(field => (
+                        <td key={field} className="col-text">
+                          {isExpanded ? (
+                            <input
+                              className={
+                                edit[field] !== undefined
+                                  ? "input-dirty"
+                                  : ""
+                              }
+                              value={edit[field] ?? row[field] ?? ""}
+                              onChange={e =>
+                                updateEdit(row.id, field, e.target.value)
+                              }
+                            />
+                          ) : (
+                            row[field] || "—"
+                          )}
+                        </td>
+                      ))}
+
+                      <td className="col-preview">
+                        <button
+                          onClick={() =>
+                            isPlaying
+                              ? pause()
+                              : playTrack(row.id, { preview: true })
+                          }
+                        >
+                          {isPlaying ? "❚❚" : "▶"}
+                        </button>
+
+                        <button onClick={() => seekBy(-10)}>−10</button>
+                        <button onClick={() => seekBy(10)}>+10</button>
+                      </td>
+                    </tr>
+
+                    {isExpanded && (
+                      <tr className="expanded">
+                        <td colSpan={6}>
+                          <div className="expanded-grid">
+                            {[
+                              "album_artist",
+                              "track",
+                              "year",
+                              "bpm",
+                              "composer",
+                            ].map(field => (
+                              <input
+                                key={field}
+                                placeholder={field.replace("_", " ")}
+                                className={
+                                  edit[field] !== undefined
+                                    ? "input-dirty"
+                                    : ""
+                                }
+                                value={edit[field] ?? row[field] ?? ""}
+                                onChange={e =>
+                                  updateEdit(row.id, field, e.target.value)
+                                }
+                              />
+                            ))}
+                          </div>
+
+                          <div className="expanded-actions">
+                            {isRowDirty(row) && (
+                              <button
+                                className="btn btn-primary"
+                                onClick={() => {
+                                  console.log(
+                                    "Apply row",
+                                    row.id,
+                                    edits[row.id]
+                                  );
+                                  setEdits(prev => {
+                                    const next = { ...prev };
+                                    delete next[row.id];
+                                    return next;
+                                  });
+                                }}
+                              >
+                                Apply
+                              </button>
+                            )}
+                          </div>
+
+                          <div className="expanded-path">
+                            {row.original_path}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>

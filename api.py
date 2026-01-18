@@ -219,78 +219,86 @@ def build_order_by(sort_param: Optional[str]) -> str:
 def search_files(
     q: Optional[str] = Query(None),
     field: str = Query("artist", regex="^(artist|album|title)$"),
+
     starts_with: Optional[str] = Query(None),
-    strict: bool = Query(False),
-    case_sensitive: bool = Query(False),
-    wildcards: bool = Query(False),
-    sort_by: Optional[str] = Query(None, regex="^(artist|album|title)$"),
-    sort_dir: str = Query("asc", regex="^(asc|desc)$"),
+
+    sort: Optional[str] = Query(
+        None,
+        description="Comma separated sort fields, e.g. artist:asc,album:asc,title:asc"
+    ),
+
     max_results: Optional[int] = Query(None, ge=1),
-    sort: Optional[str] = Query(None),
 ):
     conn = get_db()
-
-    VALID_FIELDS = {"artist", "album", "title"}
-
-    if field not in VALID_FIELDS:
-        raise HTTPException(status_code=400, detail="INVALID_FIELD")
-
-    if sort_by and sort_by not in VALID_FIELDS:
-        raise HTTPException(status_code=400, detail="INVALID_SORT_FIELD")
 
     where_clauses = []
     params = []
 
-    column = field
+    # =========================
+    # TEXT SEARCH (q)
+    # =========================
+    if q and not starts_with:
+        q = q.strip()
 
-    # ======================================================
-    # ALPHABET FILTER (OVERRIDES q COMPLETELY)
-    # ======================================================
-    if starts_with:
-        if starts_with == "#":
-            where_clauses.append(
-                f"{column} IS NOT NULL AND {column} GLOB '[^A-Za-z]*'"
+        column = field
+
+        # Wildcards support (* and ?)
+        if "*" in q or "?" in q:
+            pattern = (
+                q.replace("*", "%")
+                 .replace("?", "_")
             )
-        else:
+
             where_clauses.append(
                 f"{column} IS NOT NULL AND LOWER({column}) LIKE LOWER(?)"
             )
+            params.append(pattern)
+
+        else:
+            # STRICT equality by default
+            where_clauses.append(
+                f"{column} IS NOT NULL AND LOWER({column}) = LOWER(?)"
+            )
+            params.append(q)
+
+    # =========================
+    # ALPHABET FILTER
+    # =========================
+    if starts_with:
+        if starts_with == "#":
+            where_clauses.append(
+                f"{field} IS NOT NULL AND {field} GLOB '[^A-Za-z]*'"
+            )
+        else:
+            where_clauses.append(
+                f"{field} IS NOT NULL AND LOWER({field}) LIKE LOWER(?)"
+            )
             params.append(f"{starts_with}%")
 
-    # ======================================================
-    # TEXT SEARCH (ONLY IF NO starts_with)
-    # ======================================================
-    elif q:
-        if wildcards:
-            pattern = q.replace("*", "%").replace("?", "_")
-        else:
-            pattern = q
-
-        if strict:
-            op = "="
-            value = pattern
-        else:
-            op = "LIKE"
-            value = f"%{pattern}%"
-
-        if case_sensitive:
-            where_clauses.append(f"{column} {op} ?")
-        else:
-            where_clauses.append(f"LOWER({column}) {op} LOWER(?)")
-
-        params.append(value)
-
-    # ======================================================
-    # BUILD SQL
-    # ======================================================
     where_sql = (
-        f"WHERE {' AND '.join(where_clauses)}"
-        if where_clauses
-        else ""
+        "WHERE " + " AND ".join(where_clauses)
+        if where_clauses else ""
     )
 
-    order_sql = build_order_by(sort)
+    # =========================
+    # SORTING
+    # =========================
+    order_sql = ""
+    if sort:
+        order_parts = []
+        for part in sort.split(","):
+            col, direction = part.split(":")
+            if col not in ("artist", "album", "title"):
+                continue
+            dir_sql = "DESC" if direction.lower() == "desc" else "ASC"
+            order_parts.append(f"{col} COLLATE NOCASE {dir_sql}")
 
+        if order_parts:
+            order_sql = "ORDER BY " + ", ".join(order_parts)
+
+    # =========================
+    # LIMIT
+    # =========================
     limit_sql = ""
     if max_results:
         limit_sql = "LIMIT ?"
@@ -307,14 +315,13 @@ def search_files(
         FROM files
         {where_sql}
         {order_sql}
+        {limit_sql}
     """
 
     rows = conn.execute(sql, params).fetchall()
     conn.close()
 
     return [FileSummary(**dict(r)) for r in rows]
-
-
 
 # ===================== SINGLE FILE =====================
 
