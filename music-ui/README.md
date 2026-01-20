@@ -296,6 +296,254 @@ Pedro is already usable, but **not yet “finished”** — by design.
 
 ---
 
+## Recent Enhancements (2026)
+
+Pedro has recently gained a major internal upgrade that makes it safer, more flexible, and much more future-proof.
+
+These changes are designed to eliminate forced rescans, preserve manual curation work, and unlock richer metadata workflows.
+
+---
+
+## Extended Metadata Support
+
+Pedro now natively supports additional music metadata fields beyond the classic core tags:
+
+- Composer
+- Year
+- BPM
+- Disc #
+- Disc total
+- Track total
+- Comment
+- Lyrics
+- Publisher
+
+These fields are:
+
+- Auto-extracted during scans
+- Fully editable in the UI
+- PATCH-writable via the backend API
+- Tracked for dirty-state changes
+- Included in both single-row and bulk updates
+
+This makes Pedro suitable not only for pop/rock libraries but also for:
+
+- Classical collections
+- Soundtracks
+- Jazz archives
+- Audiobook libraries
+- DJ-style BPM-driven libraries
+
+---
+
+## Auto-Migrating Database Schema
+
+Pedro now performs **safe, additive schema upgrades** on startup.
+
+When new metadata columns are introduced:
+
+- The backend automatically checks the existing database schema
+- Missing columns are added using idempotent migrations
+- No data is destroyed
+- No rescan is required
+- No user action is required
+
+This guarantees:
+
+- Forward compatibility between Pedro versions
+- Zero-loss upgrades
+- No forced library re-indexing
+
+In other words:  
+You can upgrade Pedro without paying the price of re-scanning 30,000+ tracks again.
+
+---
+
+## Controlled Database Update Modes
+
+Pedro’s CLI now supports multiple update strategies to protect manual edits and reduce unnecessary work:
+
+--db-mode full  
+  Full scan. Refreshes metadata, fingerprints, and recommendations.
+
+--db-mode tags-only  
+  Only refreshes tag metadata from files.  
+  Does NOT recompute fingerprints or paths.
+
+--db-mode normalize-only  
+  Only recomputes normalized text fields used for alias detection.
+
+--db-mode schema-only  
+  Only applies schema migrations.  
+  Does NOT scan files at all.
+
+--db-mode no-overwrite  
+  Updates only missing fields.  
+  Never overwrites existing user-edited metadata.
+
+These modes allow you to:
+
+- Safely refresh manually edited tags
+- Add new metadata fields retroactively
+- Avoid redoing heavy work like fingerprinting
+- Evolve your library schema without downtime
+
+---
+
+## Single + Bulk Metadata Editing (UI)
+
+Pedro’s UI now supports:
+
+- Per-row inline editing
+- Dirty-state tracking (visual + structural)
+- Per-row Apply buttons
+- Multi-row bulk edits
+- Backend-backed PATCH persistence
+
+Key behaviors:
+
+- Rows become visually marked when modified
+- Unsaved edits are never applied automatically
+- Dirty rows show:
+  - A left-side highlight bar
+  - A visible star indicator (*)
+- Bulk edits are only enabled when 2+ rows are selected
+- All updates go through deterministic backend APIs
+- Local UI state is refreshed only after successful server writes
+
+This preserves Pedro’s core philosophy:
+
+No silent changes.  
+No accidental data loss.  
+No magical background saves.
+
+---
+
+## New Backend Endpoints
+
+The backend API has been extended to support safe write operations:
+
+PATCH /files/{id}  
+  Update metadata fields for a single file.
+
+PATCH /files/bulk  
+  Apply the same metadata updates to multiple files.
+
+Both endpoints:
+
+- Accept partial field updates
+- Only modify explicitly provided fields
+- Return updated row payloads
+- Never mutate filesystem contents
+
+This cleanly separates:
+
+Database curation  
+from  
+Filesystem materialization
+
+---
+
+## Internationalization Discipline
+
+Pedro now follows strict i18n discipline across the UI:
+
+- All user-facing strings are key-based
+- Language dictionaries live in /music-ui/src/i18n
+- New UI strings must be registered in:
+  - en.js
+  - es.js
+  - de.js
+- Backend responses are also key-oriented where applicable
+
+This guarantees:
+
+- No hardcoded UI strings
+- No future translation debt
+- A clear path to multi-language support
+
+---
+
+## Forward Direction: Startup / First-Run UI (Planned)
+
+Pedro is transitioning away from a CLI-first onboarding experience.
+
+A new **Startup / First-Run UI** is planned to allow non-technical users to:
+
+- Choose a source music directory
+- Choose a target library directory
+- Design folder structure visually (drag-and-drop)
+- Configure scan options
+- Launch the initial scan from the UI
+- Track scan progress live
+- Enter the main Pedro UI after completion
+
+This will remove the need to:
+
+- Manually run CLI commands
+- Hand-edit .env files
+- Understand backend bootstrapping
+
+CLI will remain available for power users,  
+but UI will become the primary onboarding path.
+
+---
+
+## Compatibility Promise
+
+Pedro makes the following stability guarantees:
+
+- New versions will never silently destroy existing DB data
+- Schema upgrades will always be additive
+- Manual UI edits will never be overwritten unless explicitly requested
+- Files will never be touched without explicit user confirmation
+- No feature will require forced re-scans unless strictly unavoidable
+
+---
+
+## Development Status (Updated)
+
+Pedro is now beyond the "prototype" stage.
+
+Current stability tier:
+- Backend: Stable core
+- Database: Forward-compatible
+- UI: Feature-complete for core workflows
+
+Active development focus:
+- Startup / First-run UI
+- Library materialization (copy/move executor)
+- Tree presets and layout builder
+- Playlist export
+- Alias cluster resolution workflows
+- Visual tree preview
+- Review-before-apply pipeline
+
+Pedro is not a toy.  
+Pedro is not a weekend script.
+
+Pedro is becoming a serious long-term library curation system.
+
+---
+
+## Final Note
+
+Pedro Organiza is evolving from:
+
+"A script I use to clean my library"
+
+into:
+
+"A deterministic, review-first, future-proof music curation platform"
+
+If you care about your music library,  
+Pedro will respect that.
+
+If you don’t,  
+there are easier tools 🙂
+
+---
+
 ## Contributing
 
 Pedro was born out of a personal need, but contributions are welcome.
@@ -321,3 +569,17 @@ Pedro Organiza exists because messy music libraries are a solved problem **only 
 If you don’t care, there are easier tools.
 
 If you do care — Pedro is for you.
+
+
+---
+
+## Contact
+
+For questions, feedback, or contributions:
+
+- Open an issue on GitHub
+- Email: carlos.revilla.m@gmail.com (TBD)
+
+---
+
+## End of Document
