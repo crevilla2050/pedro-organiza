@@ -1,9 +1,11 @@
 import { useState, Fragment } from "react";
 import { usePlayback } from "../context/PlaybackContext";
+import { t } from "../i18n";
 
 const API_BASE = "http://127.0.0.1:8000";
 
 export default function FileTable() {
+
   /* ===================== PLAYBACK ===================== */
 
   const {
@@ -70,7 +72,7 @@ export default function FileTable() {
       setRows(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error("Search failed:", err);
-      setError("Search failed");
+      setError(t("SEARCH_FAILED"));
       setRows([]);
     } finally {
       setLoading(false);
@@ -134,6 +136,80 @@ export default function FileTable() {
     setEdits({});
   };
 
+  /* ===================== PATCH HELPERS ===================== */
+
+  const applyRowEdits = async (rowId) => {
+    const payload = edits[rowId];
+    if (!payload || Object.keys(payload).length === 0) return;
+
+    try {
+      const res = await fetch(`${API_BASE}/files/${rowId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const data = await res.json();
+
+      setRows(prev =>
+        prev.map(r => (r.id === rowId ? data.file : r))
+      );
+
+      setEdits(prev => {
+        const next = { ...prev };
+        delete next[rowId];
+        return next;
+      });
+
+    } catch (err) {
+      console.error("Row update failed:", err);
+      alert(t("ROW_APPLY_FAILED"));
+    }
+  };
+
+  const applyBulkEdits = async () => {
+    if (!bulkEnabled) return;
+
+    const payload = Object.fromEntries(
+      Object.entries(bulkEdit).filter(([_, v]) => v !== "")
+    );
+
+    if (Object.keys(payload).length === 0) return;
+
+    try {
+      const res = await fetch(`${API_BASE}/files/bulk`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ids: bulkSelectedIds,
+          fields: payload,
+        }),
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      await res.json();
+
+      setRows(prev =>
+        prev.map(r =>
+          bulkSelectedIds.includes(r.id)
+            ? { ...r, ...payload }
+            : r
+        )
+      );
+
+      setBulkEdit({ disc: "" });
+      setSelectedIds(new Set());
+      setEdits({});
+
+    } catch (err) {
+      console.error("Bulk update failed:", err);
+      alert(t("BULK_APPLY_FAILED"));
+    }
+  };
+
   /* ===================== RENDER ===================== */
 
   return (
@@ -143,15 +219,15 @@ export default function FileTable() {
       <div className="pedro-sticky-filter">
         <div className="filter-row">
           <select value={searchField} onChange={onFieldChange}>
-            <option value="artist">Artist</option>
-            <option value="album">Album</option>
-            <option value="title">Title</option>
+            <option value="artist">{t("FIELD_ARTIST")}</option>
+            <option value="album">{t("FIELD_ALBUM")}</option>
+            <option value="title">{t("FIELD_TITLE")}</option>
           </select>
 
           <input
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
-            placeholder="Search…"
+            placeholder={t("SEARCH_PLACEHOLDER")}
             onKeyDown={(e) => {
               if (e.key === "Enter") onApply();
             }}
@@ -162,7 +238,7 @@ export default function FileTable() {
             onClick={onApply}
             disabled={!searchText}
           >
-            Apply
+            {t("APPLY")}
           </button>
         </div>
 
@@ -190,7 +266,7 @@ export default function FileTable() {
             className="btn btn-sm btn-outline-secondary"
             onClick={onClearFilters}
           >
-            Clear filters
+            {t("CLEAR_FILTERS")}
           </button>
         </div>
       </div>
@@ -198,13 +274,13 @@ export default function FileTable() {
       {/* ================= BULK EDIT BAR ================= */}
       <div className={`pedro-sticky-bulk ${bulkEnabled ? "" : "disabled"}`}>
         <div className="bulk-row primary">
-          <input placeholder="Artist" disabled={!bulkEnabled} />
-          <input placeholder="Album" disabled={!bulkEnabled} />
-          <input placeholder="Album Artist" disabled={!bulkEnabled} />
-          <input placeholder="Year" disabled={!bulkEnabled} />
-          <input placeholder="BPM" disabled={!bulkEnabled} />
+          <input placeholder={t("FIELD_ARTIST")} disabled />
+          <input placeholder={t("FIELD_ALBUM")} disabled />
+          <input placeholder={t("FIELD_ALBUM_ARTIST")} disabled />
+          <input placeholder={t("FIELD_YEAR")} disabled />
+          <input placeholder={t("FIELD_BPM")} disabled />
           <input
-            placeholder="Disc #"
+            placeholder={t("FIELD_DISC")}
             disabled={!bulkEnabled}
             value={bulkEdit.disc}
             onChange={e =>
@@ -215,16 +291,21 @@ export default function FileTable() {
 
         <div className="bulk-row secondary">
           <label>
-            <input type="checkbox" disabled={!bulkEnabled} />
-            Compilation
+            <input type="checkbox" disabled />
+            {t("FIELD_COMPILATION")}
           </label>
 
           <label className="mark-delete">
-            <input type="checkbox" disabled={!bulkEnabled} />
-            Mark for deletion
+            <input type="checkbox" disabled />
+            {t("MARK_FOR_DELETION")}
           </label>
 
-          <button disabled={!bulkEnabled}>Apply</button>
+          <button
+            disabled={!bulkEnabled}
+            onClick={applyBulkEdits}
+          >
+            {t("APPLY")}
+          </button>
         </div>
       </div>
 
@@ -232,10 +313,10 @@ export default function FileTable() {
       <div className="pedro-sticky-header table-header">
         <div className="col-check" />
         <div className="col-id">ID</div>
-        <div className="col-text">Artist</div>
-        <div className="col-text">Title</div>
-        <div className="col-text">Album</div>
-        <div className="col-preview">Preview</div>
+        <div className="col-text">{t("FIELD_ARTIST")}</div>
+        <div className="col-text">{t("FIELD_TITLE")}</div>
+        <div className="col-text">{t("FIELD_ALBUM")}</div>
+        <div className="col-preview">{t("PREVIEW")}</div>
       </div>
 
       {/* ================= BODY ================= */}
@@ -243,12 +324,12 @@ export default function FileTable() {
 
         {showLegend && (
           <div className="table-hint">
-            <strong>35k+</strong> files found — please refine your search
+            <strong>35k+</strong> {t("REFINE_SEARCH_HINT")}
           </div>
         )}
 
         {loading && (
-          <div className="table-hint">Searching…</div>
+          <div className="table-hint">{t("SEARCHING")}</div>
         )}
 
         {error && (
@@ -329,23 +410,23 @@ export default function FileTable() {
                         <td colSpan={6}>
                           <div className="expanded-grid">
                             {[
-                              "album_artist",
-                              "track",
-                              "year",
-                              "bpm",
-                              "composer",
-                            ].map(field => (
+                              ["album_artist", "FIELD_ALBUM_ARTIST"],
+                              ["track", "FIELD_TRACK"],
+                              ["year", "FIELD_YEAR"],
+                              ["bpm", "FIELD_BPM"],
+                              ["composer", "FIELD_COMPOSER"],
+                            ].map(([field, key]) => (
                               <input
                                 key={field}
-                                placeholder={field.replace("_", " ")}
-                                className={
-                                  edit[field] !== undefined
-                                    ? "input-dirty"
-                                    : ""
-                                }
+                                placeholder={t(key)}
                                 value={edit[field] ?? row[field] ?? ""}
                                 onChange={e =>
                                   updateEdit(row.id, field, e.target.value)
+                                }
+                                className={
+                                  (edit[field] ?? "") !== (row[field] ?? "")
+                                    ? "input-dirty"
+                                    : ""
                                 }
                               />
                             ))}
@@ -355,20 +436,9 @@ export default function FileTable() {
                             {isRowDirty(row) && (
                               <button
                                 className="btn btn-primary"
-                                onClick={() => {
-                                  console.log(
-                                    "Apply row",
-                                    row.id,
-                                    edits[row.id]
-                                  );
-                                  setEdits(prev => {
-                                    const next = { ...prev };
-                                    delete next[row.id];
-                                    return next;
-                                  });
-                                }}
+                                onClick={() => applyRowEdits(row.id)}
                               >
-                                Apply
+                                {t("APPLY")}
                               </button>
                             )}
                           </div>

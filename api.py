@@ -9,6 +9,8 @@ Stable backend API for:
 - enrichment preview
 - alias clusters
 - side panel selection logic (tags + genres)
+- single-row metadata updates
+- bulk metadata updates
 
 Rules:
 - No filesystem mutation
@@ -98,6 +100,25 @@ class EnrichmentResult(BaseModel):
     tags: Optional[Dict[str, Any]] = None
 
 
+class FileUpdatePayload(BaseModel):
+    artist: Optional[str] = None
+    album_artist: Optional[str] = None
+    album: Optional[str] = None
+    title: Optional[str] = None
+    year: Optional[int] = None
+    track: Optional[int] = None
+    disc: Optional[int] = None
+    bpm: Optional[int] = None
+    composer: Optional[str] = None
+    is_compilation: Optional[bool] = None
+    mark_delete: Optional[bool] = None
+
+
+class BulkUpdatePayload(BaseModel):
+    ids: List[int]
+    fields: Dict[str, Any]
+
+
 # ---------- Alias Clusters ----------
 
 class AliasClusterFile(BaseModel):
@@ -142,9 +163,22 @@ class TagCreatePayload(BaseModel):
     name: str
     color: Optional[str] = None
 
-class SortKey(BaseModel):
-    field: str
-    direction: str  # "asc" | "desc"
+
+# ===================== CONSTANTS =====================
+
+EDITABLE_FIELDS = {
+    "artist",
+    "album_artist",
+    "album",
+    "title",
+    "year",
+    "track",
+    "disc",
+    "bpm",
+    "composer",
+    "is_compilation",
+    "mark_delete",
+}
 
 # ===================== FILES =====================
 
@@ -170,63 +204,15 @@ def list_files():
     return [FileSummary(**dict(r)) for r in rows]
 
 
-def build_order_by(sort_param: Optional[str]) -> str:
-    """
-    Build a robust ORDER BY clause from a sort string like:
-    artist:asc,album:desc
-    """
-
-    if not sort_param:
-        return "ORDER BY artist COLLATE NOCASE ASC"
-
-    VALID_FIELDS = {
-        "artist",
-        "album",
-        "title",
-        "year",
-        "track",
-        "disc",
-    }
-
-    clauses = []
-
-    for part in sort_param.split(","):
-        try:
-            field, direction = part.split(":")
-        except ValueError:
-            continue
-
-        field = field.strip()
-        direction = direction.strip().upper()
-
-        if field not in VALID_FIELDS:
-            continue
-
-        if direction not in ("ASC", "DESC"):
-            direction = "ASC"
-
-        # NULLs last, case-insensitive
-        clauses.append(f"{field} IS NULL")
-        clauses.append(f"{field} COLLATE NOCASE {direction}")
-
-    if not clauses:
-        return "ORDER BY artist COLLATE NOCASE ASC"
-
-    return "ORDER BY " + ", ".join(clauses)
-
-
 @app.get("/files/search", response_model=List[FileSummary])
 def search_files(
     q: Optional[str] = Query(None),
-    field: str = Query("artist", regex="^(artist|album|title)$"),
-
+    field: str = Query("artist", pattern="^(artist|album|title)$"),
     starts_with: Optional[str] = Query(None),
-
     sort: Optional[str] = Query(
         None,
         description="Comma separated sort fields, e.g. artist:asc,album:asc,title:asc"
     ),
-
     max_results: Optional[int] = Query(None, ge=1),
 ):
     conn = get_db()
@@ -235,27 +221,19 @@ def search_files(
     params = []
 
     # =========================
-    # TEXT SEARCH (q)
+    # TEXT SEARCH
     # =========================
     if q and not starts_with:
         q = q.strip()
-
         column = field
 
-        # Wildcards support (* and ?)
         if "*" in q or "?" in q:
-            pattern = (
-                q.replace("*", "%")
-                 .replace("?", "_")
-            )
-
+            pattern = q.replace("*", "%").replace("?", "_")
             where_clauses.append(
                 f"{column} IS NOT NULL AND LOWER({column}) LIKE LOWER(?)"
             )
             params.append(pattern)
-
         else:
-            # STRICT equality by default
             where_clauses.append(
                 f"{column} IS NOT NULL AND LOWER({column}) = LOWER(?)"
             )
@@ -287,9 +265,14 @@ def search_files(
     if sort:
         order_parts = []
         for part in sort.split(","):
-            col, direction = part.split(":")
+            try:
+                col, direction = part.split(":")
+            except ValueError:
+                continue
+
             if col not in ("artist", "album", "title"):
                 continue
+
             dir_sql = "DESC" if direction.lower() == "desc" else "ASC"
             order_parts.append(f"{col} COLLATE NOCASE {dir_sql}")
 
@@ -323,15 +306,11 @@ def search_files(
 
     return [FileSummary(**dict(r)) for r in rows]
 
+
 # ===================== SINGLE FILE =====================
 
 @app.get("/files/{file_id}", response_model=FileSummary)
 def get_file(file_id: int):
-    """
-    Fetch a single file by ID.
-    Used for row refresh, playback sync, and post-write updates.
-    """
-
     conn = get_db()
     row = conn.execute(
         """
@@ -353,6 +332,84 @@ def get_file(file_id: int):
         raise HTTPException(status_code=404, detail="FILE_NOT_FOUND")
 
     return FileSummary(**dict(row))
+
+
+@app.patch("/files/bulk")
+def bulk_update_files(payload: BulkUpdatePayload):
+    if not payload.ids:
+        return {"status": "noop", "updated_fields": []}
+
+    updates = {
+        k: v for k, v in payload.fields.items()
+        if k in EDITABLE_FIELDS and v is not None
+    }
+
+    if not updates:
+        return {"status": "noop", "updated_fields": []}
+
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    id_placeholders = ",".join("?" for _ in payload.ids)
+
+    params = list(updates.values()) + payload.ids
+
+    conn = get_db()
+    conn.execute(
+        f"""
+        UPDATE files
+        SET {set_clause}
+        WHERE id IN ({id_placeholders})
+        """,
+        params,
+    )
+    conn.commit()
+    conn.close()
+
+    return {
+        "status": "ok",
+        "updated_fields": list(updates.keys()),
+        "updated_ids": payload.ids,
+    }
+
+
+@app.patch("/files/{file_id}")
+def update_file(file_id: int, payload: FileUpdatePayload):
+    updates = payload.dict(exclude_unset=True)
+
+    if not updates:
+        return {"status": "noop", "updated_fields": []}
+
+    invalid = [k for k in updates if k not in EDITABLE_FIELDS]
+    if invalid:
+        raise HTTPException(status_code=400, detail="INVALID_FIELDS")
+
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    params = list(updates.values()) + [file_id]
+
+    conn = get_db()
+    conn.execute(f"UPDATE files SET {set_clause} WHERE id = ?", params)
+    conn.commit()
+
+    row = conn.execute(
+        """
+        SELECT
+            id,
+            original_path,
+            artist,
+            album_artist,
+            album,
+            title
+        FROM files
+        WHERE id = ?
+        """,
+        (file_id,),
+    ).fetchone()
+    conn.close()
+
+    return {
+        "status": "ok",
+        "updated_fields": list(updates.keys()),
+        "file": dict(row) if row else None,
+    }
 
 
 # ===================== AUDIO STREAMING =====================
@@ -391,7 +448,6 @@ def stream_audio(file_id: int, request: Request):
                 remaining -= len(chunk)
                 yield chunk
 
-    # ---------- RANGE REQUEST (CRITICAL FOR BROWSERS) ----------
     if range_header:
         units, range_spec = range_header.split("=")
         start_str, end_str = range_spec.split("-")
@@ -413,7 +469,6 @@ def stream_audio(file_id: int, request: Request):
             media_type=content_type,
         )
 
-    # ---------- FULL FILE FALLBACK ----------
     headers = {
         "Content-Length": str(file_size),
         "Accept-Ranges": "bytes",
@@ -426,198 +481,5 @@ def stream_audio(file_id: int, request: Request):
         media_type=content_type,
     )
 
-# ====================== AUDIO HEADERS CHECK =====================
-
-@app.head("/audio/{file_id}")
-def head_audio(file_id: int):
-    conn = get_db()
-    row = conn.execute(
-        "SELECT original_path FROM files WHERE id = ?",
-        (file_id,),
-    ).fetchone()
-    conn.close()
-
-    if not row or not os.path.exists(row["original_path"]):
-        raise HTTPException(status_code=404)
-
-    return {}
-
-
-# ===================== FILE ENRICHMENT =====================
-
-@app.post("/files/{file_id}/enrich", response_model=EnrichmentResult)
-def enrich_file(file_id: int):
-    conn = get_db()
-    row = conn.execute(
-        "SELECT * FROM files WHERE id = ?",
-        (file_id,),
-    ).fetchone()
-    conn.close()
-
-    if not row:
-        raise HTTPException(status_code=404, detail="FILE_NOT_FOUND")
-
-    result = pedro_enrich_file(
-        source_path=row["original_path"],
-        artist_hint=row["artist"],
-        title_hint=row["title"],
-        album_artist_hint=row["album_artist"],
-        is_compilation_hint=row["is_compilation"],
-    )
-
-    return EnrichmentResult(
-        success=result.get("success", False),
-        confidence=result.get("confidence", 0.0),
-        source=result.get("source", "unknown"),
-        notes=result.get("notes"),
-        tags=result.get("tags"),
-    )
-
-# ===================== ALIAS CLUSTERS =====================
-
-@app.get("/aliases/clusters", response_model=List[AliasCluster])
-def list_alias_clusters(
-    min_size: int = Query(2, ge=2),
-):
-    conn = get_db()
-    clusters = clusters_as_records(conn, min_size=min_size)
-    conn.close()
-
-    return [
-        {
-            "cluster_id": idx,
-            "size": cluster["size"],
-            "confidence": cluster.get("confidence"),
-            "signals": cluster.get("signals", {}),
-            "canonical_candidate_id": None,
-            "resolution_status": "unresolved",
-            "user_decision": None,
-            "notes": None,
-            "cluster_tags": [],
-            "files": cluster["files"],
-        }
-        for idx, cluster in enumerate(clusters, start=1)
-    ]
-
-# ===================== SIDE PANEL: TAGS =====================
-
-@app.get("/side-panel/tags")
-def side_panel_tags(
-    entity_type: str = Query(...),
-    entity_ids: str = Query(""),
-):
-    ids = [int(x) for x in entity_ids.split(",") if x.strip()]
-    conn = get_db()
-    try:
-        return tags_for_selection(
-            conn,
-            entity_type=entity_type,
-            entity_ids=ids,
-        )
-    finally:
-        conn.close()
-
-
-@app.post("/side-panel/tags/apply")
-def side_panel_tags_apply(payload: TagApplyPayload):
-    conn = get_db()
-    try:
-        apply_tags(
-            conn,
-            entity_type=payload.entity_type,
-            entity_ids=payload.entity_ids,
-            tag_ids=payload.tag_ids,
-        )
-    finally:
-        conn.close()
-
-    return {"key": "TAGS_APPLIED"}
-
-
-@app.post("/side-panel/tags/remove")
-def side_panel_tags_remove(payload: TagApplyPayload):
-    conn = get_db()
-    try:
-        remove_tags(
-            conn,
-            entity_type=payload.entity_type,
-            entity_ids=payload.entity_ids,
-            tag_ids=payload.tag_ids,
-        )
-    finally:
-        conn.close()
-
-    return {"key": "TAGS_REMOVED"}
-
-
-@app.post("/side-panel/tags/create")
-def side_panel_tags_create(payload: TagCreatePayload):
-    conn = get_db()
-    try:
-        tag = create_tag(conn, payload.name, payload.color)
-    finally:
-        conn.close()
-
-    return {"key": "TAG_CREATED", "tag": tag}
-
-# ===================== SIDE PANEL: GENRES =====================
-
-@app.get("/side-panel/genres")
-def side_panel_genres(
-    entity_type: str = Query("file"),
-    entity_ids: str = Query(""),
-):
-    ids = [int(x) for x in entity_ids.split(",") if x.strip()]
-    conn = get_db()
-    try:
-        if entity_type != "file":
-            raise HTTPException(status_code=400, detail="UNSUPPORTED_ENTITY_FOR_GENRES")
-
-        return genres_for_selection(conn, ids)
-    finally:
-        conn.close()
-
-
-@app.post("/side-panel/genres/apply")
-def side_panel_genres_apply(payload: GenreApplyPayload):
-    conn = get_db()
-    try:
-        if payload.entity_type != "file":
-            raise HTTPException(status_code=400, detail="UNSUPPORTED_ENTITY_FOR_GENRES")
-
-        # Link each file to each genre
-        for gid in payload.genre_ids:
-            for fid in payload.entity_ids:
-                link_file_to_genre(conn, fid, gid, source="tag", confidence=1.0, apply=True)
-        conn.commit()
-    finally:
-        conn.close()
-
-    return {"key": "GENRES_APPLIED"}
-
-
-@app.post("/side-panel/genres/remove")
-def side_panel_genres_remove(payload: GenreApplyPayload):
-    conn = get_db()
-    try:
-        if payload.entity_type != "file":
-            raise HTTPException(status_code=400, detail="UNSUPPORTED_ENTITY_FOR_GENRES")
-
-        if not payload.entity_ids or not payload.genre_ids:
-            return
-
-        conn.execute(
-            f"""
-            DELETE FROM file_genres
-            WHERE file_id IN ({','.join('?' for _ in payload.entity_ids)})
-              AND genre_id IN ({','.join('?' for _ in payload.genre_ids)})
-            """,
-            (*payload.entity_ids, *payload.genre_ids),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    return {"key": "GENRES_REMOVED"}
 
 # ===================== END =====================

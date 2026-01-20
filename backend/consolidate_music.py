@@ -338,6 +338,24 @@ def ensure_normalized_columns(c):
     ensure_column(c, "files", "album_norm", "album_norm TEXT")
     ensure_column(c, "files", "title_norm", "title_norm TEXT")
 
+def ensure_metadata_columns(c):
+    """
+    Ensure all optional metadata columns exist.
+
+    This function is additive and idempotent.
+    It allows forward-compatible schema upgrades without forcing
+    users to rebuild their database.
+    """
+
+    ensure_column(c, "files", "composer", "composer TEXT")
+    ensure_column(c, "files", "year", "year TEXT")
+    ensure_column(c, "files", "bpm", "bpm INTEGER")
+    ensure_column(c, "files", "disc", "disc TEXT")
+    ensure_column(c, "files", "track_total", "track_total TEXT")
+    ensure_column(c, "files", "disc_total", "disc_total TEXT")
+    ensure_column(c, "files", "comment", "comment TEXT")
+    ensure_column(c, "files", "lyrics", "lyrics TEXT")
+    ensure_column(c, "files", "publisher", "publisher TEXT")
 
 def ensure_alias_views(c):
     # --- Signal A: SHA-256 ---
@@ -609,6 +627,7 @@ def create_db(db_path):
     CREATE INDEX IF NOT EXISTS idx_genre_mappings_norm ON genre_mappings(normalized_token);
     """)
 
+    ensure_metadata_columns(c)
     ensure_normalized_columns(c)
     ensure_alias_views(c)
 
@@ -675,20 +694,7 @@ def compute_fingerprint(path: Path):
 # ================= METADATA =================
 
 def extract_tags(path: Path):
-    """Extract tags and technical info from an audio file using
-    Mutagen.
-
-    The function returns a dictionary with the canonical keys used by
-    the rest of the pipeline. It is defensive: when Mutagen cannot
-    parse the file or a particular tag is missing we return `None`
-    values, and we also include `orig_name` (the file stem) so files
-    without tags still get a usable suggested filename.
-
-    The `is_compilation` flag is detected by looking for common tag
-    frames used by different formats (TCMP, CPIL, etc.). We check the
-    raw tag container (`easy=False`) to find these signals.
-    """
-
+    """Extract tags and technical info from an audio file using Mutagen."""
     try:
         audio = MutagenFile(path, easy=True)
         raw = MutagenFile(path, easy=False)
@@ -696,42 +702,85 @@ def extract_tags(path: Path):
         album_artist = audio.get("albumartist", [None])[0] if audio else None
         is_comp = 0
 
-        # Some formats expose a dedicated compilation flag — check the
-        # low-level tag container keys to detect it reliably.
         if raw and hasattr(raw, "tags"):
             for k in raw.tags.keys():
                 if str(k).lower() in ("tcmp", "compilation", "cpil"):
                     is_comp = 1
                     break
 
+        track_raw = audio.get("tracknumber", [None])[0] if audio else None
+        track = normalize_track(track_raw)
+        track_total = None
+        if track_raw and "/" in str(track_raw):
+            parts = str(track_raw).split("/", 1)
+            if len(parts) == 2:
+                track_total = parts[1]
+
+        disc_raw = audio.get("discnumber", [None])[0] if audio else None
+        disc = disc_raw.split("/")[0] if disc_raw and "/" in str(disc_raw) else disc_raw
+        disc_total = None
+        if disc_raw and "/" in str(disc_raw):
+            parts = str(disc_raw).split("/", 1)
+            if len(parts) == 2:
+                disc_total = parts[1]
+
         return {
             "artist": audio.get("artist", [None])[0] if audio else None,
             "album_artist": album_artist,
             "album": audio.get("album", [None])[0] if audio else None,
             "title": audio.get("title", [None])[0] if audio else None,
-            "track": normalize_track(audio.get("tracknumber", [None])[0]) if audio else None,
+
+            "track": track,
+            "track_total": track_total,
+            "disc": disc,
+            "disc_total": disc_total,
+
+            # ---------- NEW METADATA ----------
+            "composer": audio.get("composer", [None])[0] if audio else None,
+            "year": audio.get("date", [None])[0] if audio else None,
+            "bpm": (
+                int(audio.get("bpm", [None])[0])
+                if audio and audio.get("bpm", [None])[0]
+                and str(audio.get("bpm", [None])[0]).isdigit()
+                else None
+            ),
+            "comment": audio.get("comment", [None])[0] if audio else None,
+            "lyrics": None,
+            "publisher": audio.get("publisher", [None])[0] if audio else None,
+            # ----------------------------------
+
             "genre": audio.get("genre", [None])[0] if audio else None,
             "duration": getattr(audio.info, "length", None) if audio else None,
             "bitrate": getattr(audio.info, "bitrate", None) if audio else None,
             "is_compilation": is_comp,
             "orig_name": path.stem,
         }
+
     except Exception:
-        # Tag extraction is best-effort; on failure return a minimal
-        # safe structure so the rest of the pipeline can continue.
         return {
             "artist": None,
             "album_artist": None,
             "album": None,
             "title": None,
+
             "track": None,
+            "track_total": None,
+            "disc": None,
+            "disc_total": None,
+
+            "composer": None,
+            "year": None,
+            "bpm": None,
+            "comment": None,
+            "lyrics": None,
+            "publisher": None,
+
             "genre": None,
             "duration": None,
             "bitrate": None,
             "is_compilation": 0,
             "orig_name": path.stem,
         }
-
 
 # ================= INGEST =================
 
@@ -744,36 +793,21 @@ def analyze_files(
     search_covers=False,
     only_states=None,
     exclude_states=None,
+    db_mode="full",        # "full" | "schema-only" | "tags-only" | "normalize-only" | "no-overwrite"
 ):
-    """Top-level analysis routine.
-
-    Parameters
-    - `src`: path to the source tree to scan for music files
-    - `lib`: path to the user's library root used when building
-      `recommended_path`
-    - `db_path`: path to the SQLite DB file used to persist results
-    - `progress`: show a progress bar if `tqdm` is available
-    - `with_fingerprint`: enable Chromaprint-based fingerprints
-    - `search_covers`: attempt to discover album art for newly seen
-      files
-    - `only_states` / `exclude_states`: reserved for future filtering
-
-    Behavior summary:
-    - Walk the `src` tree and build a list of candidate audio files
-    - For each file compute tags, SHA-256 and optionally fingerprint
-    - Upsert a row into `files` and add an `actions.move` row when a
-      file is first discovered
-    - Optionally attempt to ingest album art candidates
-
-    The resulting DB contains both the raw observations and a queue of
-    proposed `actions` for a separate executor to apply.
-    """
+    """Top-level analysis routine."""
 
     conn = create_db(db_path)
     c = conn.cursor()
 
-    # Gather all audio files under `src`. Using `rglob` means this is a
-    # recursive discovery; `is_audio_file` acts as a fast filter.
+    # ---------- SCHEMA-ONLY MODE ----------
+    if db_mode == "schema-only":
+        log("Schema migration only — no file scanning")
+        conn.commit()
+        conn.close()
+        return
+
+    # Gather all audio files
     audio_list = [p for p in Path(src).rglob("*") if is_audio_file(p)]
     log({
         "key": MSG_FOUND_AUDIO_FILES,
@@ -781,15 +815,15 @@ def analyze_files(
     })
 
     for p in maybe_progress(audio_list, "Analyzing", progress):
-        # Extract tag metadata and compute stable signals
+
         meta = extract_tags(p)
-        sha = sha256_file(p)
-        fp = compute_fingerprint(p) if with_fingerprint else None
-        rec = recommended_path_for(lib, meta, p.suffix)
+
+        # ---------- MODE GUARDS ----------
+        sha = sha256_file(p) if db_mode != "tags-only" else None
+        fp = compute_fingerprint(p) if (with_fingerprint and db_mode == "full") else None
+        rec = recommended_path_for(lib, meta, p.suffix) if db_mode == "full" else None
         now = utcnow()
 
-        # If we've already seen this original_path, read lifecycle
-        # state so we can avoid re-creating duplicate actions.
         row = c.execute(
             "SELECT id, lifecycle_state FROM files WHERE original_path=?",
             (str(p),)
@@ -798,58 +832,171 @@ def analyze_files(
         lifecycle = row["lifecycle_state"] if row else "new"
         is_new = row is None
 
-        # Upsert the file row. We use the `original_path` as the
-        # unique key so re-running analysis refreshes metadata while
-        # preserving user-assigned lifecycle states when present.
-        c.execute("""
-            INSERT INTO files (
-                original_path, sha256, size_bytes,
-                artist, album_artist, album, title, track, genre,
-                duration, bitrate, fingerprint,
-                is_compilation, recommended_path,
-                lifecycle_state,
-                first_seen, last_update
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(original_path) DO UPDATE SET
-                sha256=excluded.sha256,
-                size_bytes=excluded.size_bytes,
-                artist=excluded.artist,
-                album_artist=excluded.album_artist,
-                album=excluded.album,
-                title=excluded.title,
-                track=excluded.track,
-                genre=excluded.genre,
-                duration=excluded.duration,
-                bitrate=excluded.bitrate,
-                fingerprint=excluded.fingerprint,
-                is_compilation=excluded.is_compilation,
-                recommended_path=excluded.recommended_path,
-                last_update=excluded.last_update
-        """, (
-            str(p), sha, p.stat().st_size,
-            meta["artist"], meta["album_artist"],
-            meta["album"], meta["title"], meta["track"],
-            meta.get("genre"),
-            meta["duration"], meta["bitrate"], fp,
-            meta["is_compilation"], rec,
-            lifecycle,
-            now, now
-        ))
+        sql = """
+        INSERT INTO files (
+            original_path, sha256, size_bytes,
+            artist, album_artist, album, title,
+            track, track_total,
+            disc, disc_total,
+            genre, composer, year, bpm, comment, lyrics, publisher,
+            duration, bitrate, fingerprint,
+            is_compilation, recommended_path,
+            lifecycle_state,
+            first_seen, last_update,
+            notes
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(original_path) DO UPDATE SET
+            sha256 = COALESCE(excluded.sha256, sha256),
+            size_bytes = COALESCE(excluded.size_bytes, size_bytes),
 
-        # Query back the `id` for convenience and normalization
+            artist = CASE
+                WHEN excluded.artist IS NOT NULL OR ? != 'no-overwrite'
+                THEN excluded.artist ELSE artist END,
+
+            album_artist = CASE
+                WHEN excluded.album_artist IS NOT NULL OR ? != 'no-overwrite'
+                THEN excluded.album_artist ELSE album_artist END,
+
+            album = CASE
+                WHEN excluded.album IS NOT NULL OR ? != 'no-overwrite'
+                THEN excluded.album ELSE album END,
+
+            title = CASE
+                WHEN excluded.title IS NOT NULL OR ? != 'no-overwrite'
+                THEN excluded.title ELSE title END,
+
+            track = CASE
+                WHEN excluded.track IS NOT NULL OR ? != 'no-overwrite'
+                THEN excluded.track ELSE track END,
+
+            track_total = CASE
+                WHEN excluded.track_total IS NOT NULL OR ? != 'no-overwrite'
+                THEN excluded.track_total ELSE track_total END,
+
+            disc = CASE
+                WHEN excluded.disc IS NOT NULL OR ? != 'no-overwrite'
+                THEN excluded.disc ELSE disc END,
+
+            disc_total = CASE
+                WHEN excluded.disc_total IS NOT NULL OR ? != 'no-overwrite'
+                THEN excluded.disc_total ELSE disc_total END,
+
+            genre = CASE
+                WHEN excluded.genre IS NOT NULL OR ? != 'no-overwrite'
+                THEN excluded.genre ELSE genre END,
+
+            composer = CASE
+                WHEN excluded.composer IS NOT NULL OR ? != 'no-overwrite'
+                THEN excluded.composer ELSE composer END,
+
+            year = CASE
+                WHEN excluded.year IS NOT NULL OR ? != 'no-overwrite'
+                THEN excluded.year ELSE year END,
+
+            bpm = CASE
+                WHEN excluded.bpm IS NOT NULL OR ? != 'no-overwrite'
+                THEN excluded.bpm ELSE bpm END,
+
+            comment = CASE
+                WHEN excluded.comment IS NOT NULL OR ? != 'no-overwrite'
+                THEN excluded.comment ELSE comment END,
+
+            lyrics = CASE
+                WHEN excluded.lyrics IS NOT NULL OR ? != 'no-overwrite'
+                THEN excluded.lyrics ELSE lyrics END,
+
+            publisher = CASE
+                WHEN excluded.publisher IS NOT NULL OR ? != 'no-overwrite'
+                THEN excluded.publisher ELSE publisher END,
+
+            duration = CASE
+                WHEN excluded.duration IS NOT NULL OR ? != 'no-overwrite'
+                THEN excluded.duration ELSE duration END,
+
+            bitrate = CASE
+                WHEN excluded.bitrate IS NOT NULL OR ? != 'no-overwrite'
+                THEN excluded.bitrate ELSE bitrate END,
+
+            fingerprint = CASE
+                WHEN excluded.fingerprint IS NOT NULL OR ? != 'no-overwrite'
+                THEN excluded.fingerprint ELSE fingerprint END,
+
+            is_compilation = CASE
+                WHEN excluded.is_compilation IS NOT NULL OR ? != 'no-overwrite'
+                THEN excluded.is_compilation ELSE is_compilation END,
+
+            recommended_path = CASE
+                WHEN excluded.recommended_path IS NOT NULL OR ? != 'no-overwrite'
+                THEN excluded.recommended_path ELSE recommended_path END,
+
+            last_update = excluded.last_update
+        """
+
+        insert_values = (
+            str(p),
+            sha,
+            p.stat().st_size,
+            meta["artist"],
+            meta["album_artist"],
+            meta["album"],
+            meta["title"],
+            meta["track"],
+            meta["track_total"],
+            meta["disc"],
+            meta["disc_total"],
+            meta.get("genre"),
+            meta.get("composer"),
+            meta.get("year"),
+            meta.get("bpm"),
+            meta.get("comment"),
+            meta.get("lyrics"),
+            meta.get("publisher"),
+            meta["duration"],
+            meta["bitrate"],
+            fp,
+            meta["is_compilation"],
+            rec,
+            lifecycle,
+            now,
+            now,
+            None,
+        )
+
+        update_mode_flags = (
+            db_mode,  # artist
+            db_mode,  # album_artist
+            db_mode,  # album
+            db_mode,  # title
+            db_mode,  # track
+            db_mode,  # track_total
+            db_mode,  # disc
+            db_mode,  # disc_total
+            db_mode,  # genre
+            db_mode,  # composer
+            db_mode,  # year
+            db_mode,  # bpm
+            db_mode,  # comment
+            db_mode,  # lyrics
+            db_mode,  # publisher
+            db_mode,  # duration
+            db_mode,  # bitrate
+            db_mode,  # fingerprint
+            db_mode,  # is_compilation
+            db_mode,  # recommended_path
+        )
+
+        assert sql.count("?") == len(insert_values) + len(update_mode_flags)
+        c.execute(sql, insert_values + update_mode_flags)
+
         file_id = c.execute(
             "SELECT id FROM files WHERE original_path=?",
             (str(p),)
         ).fetchone()[0]
 
-        # Maintain normalized text fields used by DB views for
-        # duplicate detection
         normalize_file_row(c, file_id)
 
-        # Create a move action only when the file is first discovered;
-        # downstream code is expected to apply or review these actions.
-        if is_new:
+        if is_new and db_mode in ("full", "tags-only"):
             c.execute("""
                 INSERT INTO actions (
                     file_id, action, src_path, dst_path, created_at
@@ -857,15 +1004,13 @@ def analyze_files(
                 VALUES (?, 'move', ?, ?, ?)
             """, (file_id, str(p), rec, now))
 
-        if search_covers:
-            # If requested, attempt to ingest album art candidates for
-            # the album represented by this file.
+        if search_covers and db_mode == "full":
             file_row = c.execute("""
                 SELECT album_artist, album, is_compilation
                 FROM files WHERE id=?
             """, (file_id,)).fetchone()
 
-            ingest_album_art_for_file(c, file_row, p)
+            # ingest_album_art_for_file(c, file_row, p)
 
     conn.commit()
     conn.close()
@@ -886,6 +1031,12 @@ def main():
     parser.add_argument("--edit-tags", action="store_true")
     parser.add_argument("--only-state")
     parser.add_argument("--exclude-state")
+    parser.add_argument(
+        "--db-mode",
+        choices=["full", "schema-only", "tags-only", "normalize-only", "no-overwrite"],
+        default="full",
+        help="Control how Pedro updates the database"
+    )
 
     args = parser.parse_args()
 
@@ -896,7 +1047,9 @@ def main():
         progress=args.progress,
         with_fingerprint=args.with_fingerprint,
         search_covers=args.search_covers,
+        db_mode=args.db_mode,   # ← new
     )
+
 
 if __name__ == "__main__":
     main()
