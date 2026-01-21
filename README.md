@@ -1,12 +1,27 @@
 # Pedro Organiza 🎵  
-**A backend-first music library intelligence system**
+**A non-destructive, review-before-apply music library organizer for large, messy collections**
 
-Pedro Organiza is a **knowledge-driven music library analyzer and organizer** built for **large, messy, real-world collections**.
+Pedro Organiza is a local-first music library intelligence system designed to analyze, understand, and safely reorganize large real-world music collections.
 
-Pedro does **not** rename, delete, or “fix” your files by default.  
-Instead, it **builds a complete, inspectable SQLite knowledge base**, surfaces ambiguities, detects duplicates and variants, and lets **you** decide what happens next.
+Unlike most tools, Pedro does **not** rename, delete, or modify your files by default.
+
+Instead, it:
+
+- Builds a complete, inspectable SQLite knowledge base  
+- Detects duplicates, variants, and ambiguous metadata  
+- Surfaces conflicts instead of auto-fixing them  
+- Lets *you* review and explicitly decide what happens  
 
 > **Knowledge first. Actions later. Always auditable.**
+
+Pedro is built for people who:
+
+- Have tens of thousands of tracks  
+- Don’t trust one-click automation  
+- Want full control, traceability, and reproducibility  
+
+This is not a cleanup script.  
+This is a **library intelligence system**.
 
 ---
 
