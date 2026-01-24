@@ -240,13 +240,16 @@ Roadmap Highlights
 * Action planner UI
 * Execution audit trail UI
 
-License
+## License
 
-Pedro Organiza is released under the MIT License
-for personal, educational, and non-commercial use.
+Pedro Organiza is released under a Non-Commercial License.
 
-Commercial use requires a separate license.
-Contact the author for details.
+- Free for personal and non-commercial use  
+- Source available  
+- Commercial use is not permitted without explicit permission  
+
+If you wish to use Pedro Organiza in a commercial product, service, or offering,
+please contact: carlos.revilla.m@gmail.com
 
 Contributing
 
