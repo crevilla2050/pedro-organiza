@@ -1,38 +1,35 @@
-PEDRO ORGANIZA NON-COMMERCIAL LICENSE
-Version 1.0
+Pedro Organiza – Non-Commercial License
 
-Copyright (c) 2026 Carlos Revilla - carlos.revilla.m@gmail.com
+Copyright (c) 2026 Carlos Revilla
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to use,
-copy, modify, and distribute the Software, subject to the following conditions:
+copy, modify, and distribute the Software for personal and non-commercial use,
+subject to the terms of this license.
 
-1. Permitted Use
+For the purposes of this license, "Commercial Use" means any use of the Software
+that is primarily intended for, or directed toward, commercial advantage or
+monetary compensation.
 
-The Software may be used, copied, modified, and distributed for:
-- personal use
-- educational use
-- research use
-- non-commercial use
+Commercial use of the Software is strictly prohibited without prior written
+permission from the copyright holder.
 
-2. Prohibited Use
+Commercial use includes, but is not limited to:
+- Selling the Software or derivative works
+- Including the Software in a paid product or service
+- Using the Software to provide paid services
+- Using the Software as part of a commercial offering
 
-The Software may NOT be used, in whole or in part, for any commercial purpose
-without a separate written commercial license from the copyright holder.
+Patent Grant:
+Subject to the terms of this license, the copyright holder grants you a
+non-exclusive, worldwide, royalty-free license under any patent claims
+owned or controlled by the copyright holder that are necessarily infringed
+by the use of the Software.
 
-Commercial purposes include, but are not limited to:
-- use within a for-profit organization
-- inclusion in a commercial product or service
-- offering the Software or its functionality as part of a paid service
-- monetized distributions or hosted services
-- internal business use where the Software provides operational value
+For commercial licensing, please contact:
+carlos.revilla.m@gmail.com
 
-3. Attribution
-
-Any permitted distribution of the Software must retain this license text and
-the copyright notice.
-
-4. No Warranty
+No Warranty
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -43,13 +40,12 @@ DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR
 OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE
 OR OTHER DEALINGS IN THE SOFTWARE.
 
-5. Commercial Licensing
-
-Commercial use of the Software requires a separate commercial license.
-Please contact the copyright holder to discuss terms.
-
-
-6. Termination
+Termination
 
 This license is automatically terminated if you violate any of its terms.
 Upon termination, you must destroy all copies of the Software in your possession.
+
+Commercial Licensing
+
+Commercial use of the Software requires a separate commercial license.
+Please contact the copyright holder to discuss terms.
