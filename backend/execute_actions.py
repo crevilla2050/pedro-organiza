@@ -33,7 +33,7 @@ from dotenv import load_dotenv
 
 # Optional album art normalization
 try:
-    from resize_images import normalize_image
+    from backend.resize_images import normalize_image
 except Exception:
     normalize_image = None
 

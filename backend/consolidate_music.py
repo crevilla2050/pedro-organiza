@@ -45,8 +45,8 @@ from pathlib import Path
 
 from mutagen import File as MutagenFile
 from dotenv import load_dotenv
-from normalization import normalize_text
-
+from backend.normalization import normalize_text
+from datetime import datetime
 
 try:
     from tqdm import tqdm
@@ -78,6 +78,7 @@ ENABLE_CHROMAPRINT = True
 FP_SECONDS = 90
 DATABASES_DIR = Path("databases")
 
+
 load_dotenv()
 
 logging.basicConfig(
@@ -85,6 +86,7 @@ logging.basicConfig(
     format="[%(asctime)s] %(levelname)s: %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S%z",
 )
+
 
 # ================= ENV HELPERS =================
 
@@ -474,7 +476,15 @@ def ensure_alias_views(c):
             OR (p.file_id = s.other_file_id AND p.other_file_id = s.file_id)
           );
     """)
-   
+
+def ensure_mark_delete_column(c):
+    cols = [r[1] for r in c.execute("PRAGMA table_info(files)").fetchall()]
+    if "mark_delete" not in cols:
+        log("Adding mark_delete column to files table")
+        c.execute("""
+            ALTER TABLE files
+            ADD COLUMN mark_delete INTEGER DEFAULT 0
+        """)
 
 def normalize_file_row(c, file_id):
     """Compute and persist normalized textual fields for a file.
@@ -562,7 +572,8 @@ def create_db(db_path):
         lifecycle_state TEXT DEFAULT 'new',
         first_seen TEXT,
         last_update TEXT,
-        notes TEXT
+        notes TEXT,
+        mark_delete INTEGER DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS album_art (
@@ -620,6 +631,15 @@ def create_db(db_path):
         FOREIGN KEY (file_id) REFERENCES files(id),
         FOREIGN KEY (genre_id) REFERENCES genres(id)
     );
+                    
+    CREATE TABLE IF NOT EXISTS pedro_environment (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        source_root TEXT,
+        library_root TEXT,
+        schema_version INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        last_update TEXT NOT NULL
+    );
 
     CREATE INDEX IF NOT EXISTS idx_genres_norm ON genres(normalized_name);
     CREATE INDEX IF NOT EXISTS idx_file_genres_file ON file_genres(file_id);
@@ -627,9 +647,25 @@ def create_db(db_path):
     CREATE INDEX IF NOT EXISTS idx_genre_mappings_norm ON genre_mappings(normalized_token);
     """)
 
+    # --- Ensure single environment row exists ---
+    row = c.execute(
+        "SELECT id FROM pedro_environment WHERE id = 1"
+    ).fetchone()
+
+    if not row:
+        now = utcnow()
+        c.execute("""
+            INSERT INTO pedro_environment
+            (id, source_root, library_root, schema_version, created_at, last_update)
+            VALUES (1, NULL, NULL, 1, ?, ?)
+        """, (now, now))
+
+    # --- Ensure all tables have the required columns ---
+    
     ensure_metadata_columns(c)
     ensure_normalized_columns(c)
     ensure_alias_views(c)
+    ensure_mark_delete_column(c)
 
     conn.commit()
     return conn
@@ -793,12 +829,34 @@ def analyze_files(
     search_covers=False,
     only_states=None,
     exclude_states=None,
-    db_mode="full",        # "full" | "schema-only" | "tags-only" | "normalize-only" | "no-overwrite"
+    db_mode="full",  # "full" | "schema-only" | "db-update-only" | "normalize-only"
+    no_overwrite=False,  # Only used in "db-update-only" mode
 ):
     """Top-level analysis routine."""
+    ALLOWED_DB_MODES = {"full", "schema-only", "db-update-only", "normalize-only"}
 
+    if db_mode not in ALLOWED_DB_MODES:
+        raise RuntimeError(f"Invalid db_mode: {db_mode}")
+    
     conn = create_db(db_path)
     c = conn.cursor()
+
+    # ---------- Persist environment roots (once, correctly) ----------
+    now = utcnow()
+
+    if db_mode in ("full", "schema-only", "db-update-only"):
+        c.execute("""
+            UPDATE pedro_environment
+            SET
+                source_root = COALESCE(?, source_root),
+                library_root = COALESCE(?, library_root),
+                last_update = ?
+            WHERE id = 1
+        """, (
+            os.path.abspath(src) if src else None,
+            os.path.abspath(lib) if lib else None,
+            now,
+        ))
 
     # ---------- SCHEMA-ONLY MODE ----------
     if db_mode == "schema-only":
@@ -807,6 +865,20 @@ def analyze_files(
         conn.close()
         return
 
+    # ---------- From here on, we REQUIRE src ----------
+    if not src:
+        raise RuntimeError("src must be provided for db_mode = " + db_mode)
+
+    # ---------- SCHEMA-ONLY MODE ----------
+    if db_mode == "schema-only":
+        log("Schema migration only — no file scanning")
+        conn.commit()
+        conn.close()
+        return
+    
+    if not src:
+        raise RuntimeError("src must be provided for db_mode = " + db_mode)
+
     # Gather all audio files
     audio_list = [p for p in Path(src).rglob("*") if is_audio_file(p)]
     log({
@@ -814,12 +886,13 @@ def analyze_files(
         "params": {"count": len(audio_list)}
     })
 
-    for p in maybe_progress(audio_list, "Analyzing", progress):
+    allow_filesystem = (db_mode == "full")
 
+    for p in maybe_progress(audio_list, "Analyzing", progress):
         meta = extract_tags(p)
 
         # ---------- MODE GUARDS ----------
-        sha = sha256_file(p) if db_mode != "tags-only" else None
+        sha = sha256_file(p) if db_mode != "db-update-only" else None
         fp = compute_fingerprint(p) if (with_fingerprint and db_mode == "full") else None
         rec = recommended_path_for(lib, meta, p.suffix) if db_mode == "full" else None
         now = utcnow()
@@ -847,91 +920,132 @@ def analyze_files(
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(original_path) DO UPDATE SET
-            sha256 = COALESCE(excluded.sha256, sha256),
-            size_bytes = COALESCE(excluded.size_bytes, size_bytes),
+        sha256 = COALESCE(excluded.sha256, sha256),
+        size_bytes = COALESCE(excluded.size_bytes, size_bytes),
 
-            artist = CASE
-                WHEN excluded.artist IS NOT NULL OR ? != 'no-overwrite'
-                THEN excluded.artist ELSE artist END,
+        artist = CASE
+            WHEN excluded.artist IS NOT NULL
+                AND ( ? = 0 OR artist IS NULL )
+            THEN excluded.artist
+            ELSE artist END,
 
-            album_artist = CASE
-                WHEN excluded.album_artist IS NOT NULL OR ? != 'no-overwrite'
-                THEN excluded.album_artist ELSE album_artist END,
+        album_artist = CASE
+            WHEN excluded.album_artist IS NOT NULL
+                AND ( ? = 0 OR album_artist IS NULL )
+            THEN excluded.album_artist
+            ELSE album_artist END,
 
-            album = CASE
-                WHEN excluded.album IS NOT NULL OR ? != 'no-overwrite'
-                THEN excluded.album ELSE album END,
+        album = CASE
+            WHEN excluded.album IS NOT NULL
+                AND ( ? = 0 OR album IS NULL )
+            THEN excluded.album
+            ELSE album END,
 
-            title = CASE
-                WHEN excluded.title IS NOT NULL OR ? != 'no-overwrite'
-                THEN excluded.title ELSE title END,
+        title = CASE
+            WHEN excluded.title IS NOT NULL
+                AND ( ? = 0 OR title IS NULL )
+            THEN excluded.title
+            ELSE title END,
 
-            track = CASE
-                WHEN excluded.track IS NOT NULL OR ? != 'no-overwrite'
-                THEN excluded.track ELSE track END,
+        track = CASE
+            WHEN excluded.track IS NOT NULL
+                AND ( ? = 0 OR track IS NULL )
+            THEN excluded.track
+            ELSE track END,
 
-            track_total = CASE
-                WHEN excluded.track_total IS NOT NULL OR ? != 'no-overwrite'
-                THEN excluded.track_total ELSE track_total END,
+        track_total = CASE
+            WHEN excluded.track_total IS NOT NULL
+                AND ( ? = 0 OR track_total IS NULL )
+            THEN excluded.track_total
+            ELSE track_total END,
 
-            disc = CASE
-                WHEN excluded.disc IS NOT NULL OR ? != 'no-overwrite'
-                THEN excluded.disc ELSE disc END,
+        disc = CASE
+            WHEN excluded.disc IS NOT NULL
+                AND ( ? = 0 OR disc IS NULL )
+            THEN excluded.disc
+            ELSE disc END,
 
-            disc_total = CASE
-                WHEN excluded.disc_total IS NOT NULL OR ? != 'no-overwrite'
-                THEN excluded.disc_total ELSE disc_total END,
+        disc_total = CASE
+            WHEN excluded.disc_total IS NOT NULL
+                AND ( ? = 0 OR disc_total IS NULL )
+            THEN excluded.disc_total
+            ELSE disc_total END,
 
-            genre = CASE
-                WHEN excluded.genre IS NOT NULL OR ? != 'no-overwrite'
-                THEN excluded.genre ELSE genre END,
+        genre = CASE
+            WHEN excluded.genre IS NOT NULL
+                AND ( ? = 0 OR genre IS NULL )
+            THEN excluded.genre
+            ELSE genre END,
 
-            composer = CASE
-                WHEN excluded.composer IS NOT NULL OR ? != 'no-overwrite'
-                THEN excluded.composer ELSE composer END,
+        composer = CASE
+            WHEN excluded.composer IS NOT NULL
+                AND ( ? = 0 OR composer IS NULL )
+            THEN excluded.composer
+            ELSE composer END,
 
-            year = CASE
-                WHEN excluded.year IS NOT NULL OR ? != 'no-overwrite'
-                THEN excluded.year ELSE year END,
+        year = CASE
+            WHEN excluded.year IS NOT NULL
+                AND ( ? = 0 OR year IS NULL )
+            THEN excluded.year
+            ELSE year END,
 
-            bpm = CASE
-                WHEN excluded.bpm IS NOT NULL OR ? != 'no-overwrite'
-                THEN excluded.bpm ELSE bpm END,
+        bpm = CASE
+            WHEN excluded.bpm IS NOT NULL
+                AND ( ? = 0 OR bpm IS NULL )
+            THEN excluded.bpm
+            ELSE bpm END,
 
-            comment = CASE
-                WHEN excluded.comment IS NOT NULL OR ? != 'no-overwrite'
-                THEN excluded.comment ELSE comment END,
+        comment = CASE
+            WHEN excluded.comment IS NOT NULL
+                AND ( ? = 0 OR comment IS NULL )
+            THEN excluded.comment
+            ELSE comment END,
 
-            lyrics = CASE
-                WHEN excluded.lyrics IS NOT NULL OR ? != 'no-overwrite'
-                THEN excluded.lyrics ELSE lyrics END,
+        lyrics = CASE
+            WHEN excluded.lyrics IS NOT NULL
+                AND ( ? = 0 OR lyrics IS NULL )
+            THEN excluded.lyrics
+            ELSE lyrics END,
 
-            publisher = CASE
-                WHEN excluded.publisher IS NOT NULL OR ? != 'no-overwrite'
-                THEN excluded.publisher ELSE publisher END,
+        publisher = CASE
+            WHEN excluded.publisher IS NOT NULL
+                AND ( ? = 0 OR publisher IS NULL )
+            THEN excluded.publisher
+            ELSE publisher END,
 
-            duration = CASE
-                WHEN excluded.duration IS NOT NULL OR ? != 'no-overwrite'
-                THEN excluded.duration ELSE duration END,
+        duration = CASE
+            WHEN excluded.duration IS NOT NULL
+                AND ( ? = 0 OR duration IS NULL )
+            THEN excluded.duration
+            ELSE duration END,
 
-            bitrate = CASE
-                WHEN excluded.bitrate IS NOT NULL OR ? != 'no-overwrite'
-                THEN excluded.bitrate ELSE bitrate END,
+        bitrate = CASE
+            WHEN excluded.bitrate IS NOT NULL
+                AND ( ? = 0 OR bitrate IS NULL )
+            THEN excluded.bitrate
+            ELSE bitrate END,
 
-            fingerprint = CASE
-                WHEN excluded.fingerprint IS NOT NULL OR ? != 'no-overwrite'
-                THEN excluded.fingerprint ELSE fingerprint END,
+        fingerprint = CASE
+            WHEN excluded.fingerprint IS NOT NULL
+                AND ( ? = 0 OR fingerprint IS NULL )
+            THEN excluded.fingerprint
+            ELSE fingerprint END,
 
-            is_compilation = CASE
-                WHEN excluded.is_compilation IS NOT NULL OR ? != 'no-overwrite'
-                THEN excluded.is_compilation ELSE is_compilation END,
+        is_compilation = CASE
+            WHEN excluded.is_compilation IS NOT NULL
+                AND ( ? = 0 OR is_compilation IS NULL )
+            THEN excluded.is_compilation
+            ELSE is_compilation END,
 
-            recommended_path = CASE
-                WHEN excluded.recommended_path IS NOT NULL OR ? != 'no-overwrite'
-                THEN excluded.recommended_path ELSE recommended_path END,
+        recommended_path = CASE
+            WHEN excluded.recommended_path IS NOT NULL
+                AND ( ? = 0 OR recommended_path IS NULL )
+            THEN excluded.recommended_path
+            ELSE recommended_path END,
 
-            last_update = excluded.last_update
-        """
+        last_update = excluded.last_update
+
+                """
 
         insert_values = (
             str(p),
@@ -963,27 +1077,29 @@ def analyze_files(
             None,
         )
 
+        overwrite_mode = "no-overwrite" if no_overwrite else "overwrite"
+
         update_mode_flags = (
-            db_mode,  # artist
-            db_mode,  # album_artist
-            db_mode,  # album
-            db_mode,  # title
-            db_mode,  # track
-            db_mode,  # track_total
-            db_mode,  # disc
-            db_mode,  # disc_total
-            db_mode,  # genre
-            db_mode,  # composer
-            db_mode,  # year
-            db_mode,  # bpm
-            db_mode,  # comment
-            db_mode,  # lyrics
-            db_mode,  # publisher
-            db_mode,  # duration
-            db_mode,  # bitrate
-            db_mode,  # fingerprint
-            db_mode,  # is_compilation
-            db_mode,  # recommended_path
+            overwrite_mode,  # artist
+            overwrite_mode,  # album_artist
+            overwrite_mode,  # album
+            overwrite_mode,  # title
+            overwrite_mode,  # track
+            overwrite_mode,  # track_total
+            overwrite_mode,  # disc
+            overwrite_mode,  # disc_total
+            overwrite_mode,  # genre
+            overwrite_mode,  # composer
+            overwrite_mode,  # year
+            overwrite_mode,  # bpm
+            overwrite_mode,  # comment
+            overwrite_mode,  # lyrics
+            overwrite_mode,  # publisher
+            overwrite_mode,  # duration
+            overwrite_mode,  # bitrate
+            overwrite_mode,  # fingerprint
+            overwrite_mode,  # is_compilation
+            overwrite_mode,  # recommended_path
         )
 
         assert sql.count("?") == len(insert_values) + len(update_mode_flags)
@@ -996,7 +1112,7 @@ def analyze_files(
 
         normalize_file_row(c, file_id)
 
-        if is_new and db_mode in ("full", "tags-only"):
+        if is_new and db_mode == "full":
             c.execute("""
                 INSERT INTO actions (
                     file_id, action, src_path, dst_path, created_at
@@ -1011,6 +1127,7 @@ def analyze_files(
             """, (file_id,)).fetchone()
 
             # ingest_album_art_for_file(c, file_row, p)
+    
 
     conn.commit()
     conn.close()
@@ -1022,7 +1139,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--src", required=True)
+    parser.add_argument("--src")
     parser.add_argument("--lib")
     parser.add_argument("--db")
     parser.add_argument("--progress", action="store_true")
@@ -1033,23 +1150,28 @@ def main():
     parser.add_argument("--exclude-state")
     parser.add_argument(
         "--db-mode",
-        choices=["full", "schema-only", "tags-only", "normalize-only", "no-overwrite"],
+        choices=["full", "schema-only", "db-update-only", "normalize-only"],
         default="full",
         help="Control how Pedro updates the database"
     )
+    parser.add_argument("--no-overwrite", action="store_true")
 
     args = parser.parse_args()
 
+    # Enforce --src only when mode requires scanning
+    if args.db_mode not in ("schema-only", "normalize-only") and not args.src:
+        parser.error("--src is required unless --db-mode is schema-only or normalize-only")
+
     analyze_files(
         src=args.src,
-        lib=resolve_env_path("MUSIC_LIB", args.lib),
-        db_path=resolve_database_path(args.db),
+        lib=args.lib,
+        db_path=args.db,
         progress=args.progress,
         with_fingerprint=args.with_fingerprint,
         search_covers=args.search_covers,
-        db_mode=args.db_mode,   # ← new
+        db_mode=args.db_mode,
+        no_overwrite=args.no_overwrite,
     )
-
 
 if __name__ == "__main__":
     main()

@@ -1,140 +1,155 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { PlaybackProvider } from "./context/PlaybackContext";
+
+import LandingPage from "./LandingPage";
+import StartupPage from "./startup/StartupPage";
+import ApplyStep from "./startup/steps/ApplyStep";
+import DoneStep from "./startup/steps/DoneStep";
 import FileTable from "./components/FileTable";
+
 import { t } from "./i18n";
+import pedroLogo from "./assets/logo.png";
 
 const API_BASE = "http://127.0.0.1:8000";
 
-/* ===================== HELPERS ===================== */
-
-function buildSortParam(sortState) {
-  // sortState example:
-  // [
-  //   { field: "artist", dir: "asc", locked: true },
-  //   { field: "album", dir: "asc", locked: false }
-  // ]
-
-  if (!sortState.length) return null;
-
-  return sortState
-    .map(s => `${s.field}:${s.dir}`)
-    .join(",");
-}
-
-function hasActiveFilters(filters) {
-  return Boolean(
-    filters.q ||
-    filters.starts_with
-  );
-}
-
-/* ===================== APP ===================== */
-
 export default function App() {
-  /* ===== side panel UI ===== */
-  const [panelSide, setPanelSide] = useState("left");
-  const [panelOpen, setPanelOpen] = useState(true);
+  /* ===================== STARTUP GATE ===================== */
 
-  /* ===== search + data ===== */
+  const [showLanding, setShowLanding] = useState(true);
+  const [showStartup, setShowStartup] = useState(false);
+
+  /* ===================== MAIN WORKFLOW ===================== */
+
+  const [phase, setPhase] = useState("table"); // "table" | "apply" | "done"
+  const [lastApplyReport, setLastApplyReport] = useState(null);
+
+  /* ===================== FILE TABLE STATE ===================== */
+
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  /* ===== filters ===== */
-  const [filters, setFilters] = useState({
-    q: "",
-    field: "artist",        // artist | album | title
-    starts_with: null,      // A–Z | #
-  });
+  /* ===================== SIDE PANEL UI ===================== */
 
-  /* ===== sorting ===== */
-  const [sortState, setSortState] = useState([
-    { field: "artist", dir: "asc", locked: true },
-    { field: "album", dir: "asc", locked: false },
-    { field: "title", dir: "asc", locked: false },
-  ]);
+  const [panelSide, setPanelSide] = useState("left");
+  const [panelOpen, setPanelOpen] = useState(true);
 
-  /* ===================== SEARCH CORE ===================== */
+  /* ===================== INITIAL LOAD ===================== */
 
-  const runSearch = async (nextFilters = filters) => {
-    if (!hasActiveFilters(nextFilters)) {
-      setFiles([]);
-      return;
+  useEffect(() => {
+    // Load initial file list once we enter main UI
+    if (!showLanding && !showStartup) {
+      loadInitialFiles();
     }
+  }, [showLanding, showStartup]);
 
+  const loadInitialFiles = async () => {
+    // Initial state: do NOT load any files.
+    // Files will only be loaded when the user applies a filter.
+
+    setFiles([]);
+    setLoading(false);
+    setError(null);
+  };
+
+
+  /* ===================== SEARCH / ALPHA WIRING ===================== */
+
+  const applySearch = async (q, field) => {
     setLoading(true);
     setError(null);
 
     try {
-      const params = new URLSearchParams();
-
-      if (nextFilters.q) {
-        params.set("q", nextFilters.q);
-        params.set("field", nextFilters.field);
-      }
-
-      if (nextFilters.starts_with) {
-        params.set("field", nextFilters.field);
-        params.set("starts_with", nextFilters.starts_with);
-      }
-
-      const sortParam = buildSortParam(sortState);
-      if (sortParam) {
-        params.set("sort", sortParam);
-      }
-
       const res = await fetch(
-        `${API_BASE}/files/search?${params.toString()}`
+        `${API_BASE}/files/search?q=${encodeURIComponent(q)}&field=${field}`
       );
 
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
       const data = await res.json();
-      setFiles(Array.isArray(data) ? data : []);
-    } catch (err) {
-      console.error("Search failed:", err);
-      setError(t("ERROR_GENERIC"));
-      setFiles([]);
+      setFiles(data);
+    } catch (e) {
+      console.error("Search failed:", e);
+      setError(String(e));
     } finally {
       setLoading(false);
     }
   };
 
-  /* ===================== FILTER ACTIONS ===================== */
-
-  const applyTextSearch = ({ q, field }) => {
-    const next = {
-      q,
-      field,
-      starts_with: null,
-    };
-    setFilters(next);
-    runSearch(next);
-  };
-
-  const applyAlpha = (letter) => {
-    const next = {
-      q: "",
-      field: filters.field,
-      starts_with: letter,
-    };
-    setFilters(next);
-    runSearch(next);
-  };
-
-  const clearFilters = () => {
-    setFilters({
-      q: "",
-      field: filters.field,
-      starts_with: null,
-    });
-    setFiles([]);
+  const applyAlpha = async (letter, field) => {
+    setLoading(true);
     setError(null);
+
+    try {
+      const res = await fetch(
+        `${API_BASE}/files/search?starts_with=${encodeURIComponent(letter)}&field=${field}`
+      );
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const data = await res.json();
+      setFiles(data);
+    } catch (e) {
+      console.error("Alpha search failed:", e);
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
   };
 
-  /* ===================== RENDER ===================== */
+  /* ===================== LANDING PAGE ===================== */
+
+  if (showLanding) {
+    return (
+      <LandingPage
+        onEnterWizard={() => {
+          setShowLanding(false);
+          setShowStartup(true);
+        }}
+        onEnterDirect={() => {
+          setShowLanding(false);
+          setShowStartup(false);
+        }}
+      />
+    );
+  }
+
+  /* ===================== STARTUP WIZARD ===================== */
+
+  if (showStartup) {
+    return (
+      <StartupPage
+        onComplete={() => {
+          setShowStartup(false);
+        }}
+      />
+    );
+  }
+
+  /* ===================== APPLY PHASE ===================== */
+
+  if (phase === "apply") {
+    return (
+      <ApplyStep
+        onDone={(report) => {
+          setLastApplyReport(report);
+          setPhase("done");
+        }}
+        onCancel={() => setPhase("table")}
+      />
+    );
+  }
+
+  if (phase === "done") {
+    return (
+      <DoneStep
+        report={lastApplyReport}
+        onBackToTable={() => setPhase("table")}
+      />
+    );
+  }
+
+  /* ===================== MAIN UI ===================== */
 
   return (
     <PlaybackProvider>
@@ -146,7 +161,7 @@ export default function App() {
           flexDirection: panelSide === "left" ? "row" : "row-reverse",
         }}
       >
-        {/* ================= SIDE PANEL ================= */}
+        {/* ===================== SIDE PANEL ===================== */}
         <aside
           className={`side-panel ${panelOpen ? "open" : "collapsed"}`}
           style={{
@@ -154,16 +169,14 @@ export default function App() {
             minWidth: panelOpen ? 260 : 20,
           }}
         >
-          {/* Logo */}
           <div className="side-panel-logo">
             <img
-              src="/assets/logo_web.png"
-              alt="Pedro Organiza"
+              src={pedroLogo}
+              alt={t("APP_NAME")}
               style={{ width: panelOpen ? 120 : 16 }}
             />
           </div>
 
-          {/* Controls */}
           {panelOpen && (
             <div className="side-panel-controls">
               <label>
@@ -190,7 +203,6 @@ export default function App() {
 
           <div style={{ flex: 1 }} />
 
-          {/* Mini player (mock) */}
           <div className="mini-player">
             <button>⏮</button>
             <button>▶</button>
@@ -198,17 +210,15 @@ export default function App() {
           </div>
         </aside>
 
-        {/* ================= MAIN ================= */}
+        {/* ===================== MAIN CONTENT ===================== */}
         <main className="main-content" style={{ flex: 1, minWidth: 0 }}>
           <FileTable
             files={files}
             loading={loading}
             error={error}
-            filters={filters}
-            setFilters={setFilters}
-            onApplySearch={applyTextSearch}
+            onApplySearch={applySearch}
             onAlpha={applyAlpha}
-            onClearFilters={clearFilters}
+            onGoToApply={() => setPhase("apply")}
           />
         </main>
       </div>

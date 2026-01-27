@@ -1,10 +1,25 @@
-import { useState, Fragment } from "react";
+import { useState, Fragment, useRef, useEffect } from "react";
 import { usePlayback } from "../context/PlaybackContext";
 import { t } from "../i18n";
 
+import BulkSelectionToolbar from "./BulkSelectionToolbar";
+
 const API_BASE = "http://127.0.0.1:8000";
 
-export default function FileTable() {
+export default function FileTable({
+  files,
+  loading,
+  error,
+  onApplySearch,
+  onAlpha,
+  onGoToApply,
+}) {
+  /* ===================== LOCAL FILTER STATE ===================== */
+
+  const [searchText, setSearchText] = useState("");
+  const [searchField, setSearchField] = useState("artist");
+
+  const showLegend = !loading && files.length === 0 && !searchText;
 
   /* ===================== PLAYBACK ===================== */
 
@@ -16,81 +31,70 @@ export default function FileTable() {
     currentTrackId,
   } = usePlayback();
 
-  /* ===================== FILTER STATE ===================== */
-
-  const [searchText, setSearchText] = useState("");
-  const [searchField, setSearchField] = useState("artist");
-  const [rows, setRows] = useState([]);
-  const [showLegend, setShowLegend] = useState(true);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-
   /* ===================== SELECTION STATE ===================== */
 
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [edits, setEdits] = useState({});
-  const [bulkEdit, setBulkEdit] = useState({ disc: "" });
 
   /* ---------- Derived selection ---------- */
 
   const selectedCount = selectedIds.size;
+  const selectedArray = Array.from(selectedIds);
+
   const singleSelectedId =
-    selectedCount === 1 ? Array.from(selectedIds)[0] : null;
+    selectedCount === 1 ? selectedArray[0] : null;
+
   const bulkSelectedIds =
-    selectedCount >= 2 ? Array.from(selectedIds) : [];
+    selectedCount >= 2 ? selectedArray : [];
 
-  const bulkEnabled = bulkSelectedIds.length >= 2;
+  /* ---------- NEW: visible selection helpers ---------- */
 
-  /* ===================== SEARCH CORE ===================== */
+  const visibleIds = files.map((r) => r.id);
 
-  const runSearch = async ({ q, field, startsWith = null }) => {
-    if (!q && !startsWith) {
-      setRows([]);
-      setShowLegend(true);
-      return;
-    }
+  const allVisibleSelected =
+    visibleIds.length > 0 &&
+    visibleIds.every((id) => selectedIds.has(id));
 
-    setLoading(true);
-    setError(null);
-    setShowLegend(false);
-    setSelectedIds(new Set());
-    setEdits({});
+  const someVisibleSelected =
+    visibleIds.some((id) => selectedIds.has(id)) &&
+    !allVisibleSelected;
 
-    try {
-      let url = `${API_BASE}/files/search?field=${field}`;
-
-      if (startsWith) {
-        url += `&starts_with=${encodeURIComponent(startsWith)}`;
-      } else if (q) {
-        url += `&q=${encodeURIComponent(q)}`;
-      }
-
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-      const data = await res.json();
-      setRows(Array.isArray(data) ? data : []);
-    } catch (err) {
-      console.error("Search failed:", err);
-      setError(t("SEARCH_FAILED"));
-      setRows([]);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const headerCheckboxRef = useRef(null);
 
   /* ===================== UI HANDLERS ===================== */
 
   const toggleSelect = (id) => {
-    setSelectedIds(prev => {
+    setSelectedIds((prev) => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
   };
 
+  const toggleSelectAllVisible = (checked) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+
+      if (checked) {
+        for (const id of visibleIds) {
+          next.add(id);
+        }
+      } else {
+        for (const id of visibleIds) {
+          next.delete(id);
+        }
+      }
+
+      return next;
+    });
+  };
+
+  const clearSelection = () => {
+    setSelectedIds(new Set());
+  };
+
   const updateEdit = (id, field, value) => {
-    setEdits(prev => ({
+    setEdits((prev) => ({
       ...prev,
       [id]: {
         ...(prev[id] || {}),
@@ -106,16 +110,19 @@ export default function FileTable() {
     if (!edit) return false;
 
     return Object.keys(edit).some(
-      key => (edit[key] ?? "") !== (row[key] ?? "")
+      (key) => (edit[key] ?? "") !== (row[key] ?? "")
     );
   };
 
+  /* ===================== SEARCH HANDLERS ===================== */
+
   const onApply = () => {
-    runSearch({ q: searchText, field: searchField });
+    if (!searchText) return;
+    onApplySearch(searchText, searchField);
   };
 
   const onAlphaClick = (letter) => {
-    runSearch({ field: searchField, startsWith: letter });
+    onAlpha(letter, searchField);
   };
 
   const onFieldChange = (e) => {
@@ -123,15 +130,12 @@ export default function FileTable() {
     setSearchField(newField);
 
     if (searchText) {
-      runSearch({ q: searchText, field: newField });
+      onApplySearch(searchText, newField);
     }
   };
 
-  const onClearFilters = () => {
+  const onClear = () => {
     setSearchText("");
-    setRows([]);
-    setShowLegend(true);
-    setError(null);
     setSelectedIds(new Set());
     setEdits({});
   };
@@ -151,29 +155,26 @@ export default function FileTable() {
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-      const data = await res.json();
+      await res.json();
 
-      setRows(prev =>
-        prev.map(r => (r.id === rowId ? data.file : r))
-      );
-
-      setEdits(prev => {
+      setEdits((prev) => {
         const next = { ...prev };
         delete next[rowId];
         return next;
       });
-
     } catch (err) {
       console.error("Row update failed:", err);
       alert(t("ROW_APPLY_FAILED"));
     }
   };
 
-  const applyBulkEdits = async () => {
-    if (!bulkEnabled) return;
+  /* ===================== BULK ACTIONS ===================== */
+
+  const applyBulkEdits = async (fields) => {
+    if (bulkSelectedIds.length < 2) return;
 
     const payload = Object.fromEntries(
-      Object.entries(bulkEdit).filter(([_, v]) => v !== "")
+      Object.entries(fields).filter(([_, v]) => v !== "")
     );
 
     if (Object.keys(payload).length === 0) return;
@@ -192,134 +193,150 @@ export default function FileTable() {
 
       await res.json();
 
-      setRows(prev =>
-        prev.map(r =>
-          bulkSelectedIds.includes(r.id)
-            ? { ...r, ...payload }
-            : r
-        )
-      );
-
-      setBulkEdit({ disc: "" });
       setSelectedIds(new Set());
       setEdits({});
-
     } catch (err) {
       console.error("Bulk update failed:", err);
       alert(t("BULK_APPLY_FAILED"));
     }
   };
 
+  const markBulkForDeletion = async () => {
+    if (bulkSelectedIds.length === 0) return;
+
+    try {
+      const res = await fetch(`${API_BASE}/files/bulk`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ids: bulkSelectedIds,
+          fields: { mark_delete: 1 },
+        }),
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      await res.json();
+
+      setSelectedIds(new Set());
+    } catch (err) {
+      console.error("Bulk mark-delete failed:", err);
+      alert(t("BULK_APPLY_FAILED"));
+    }
+  };
+
+  /* ===================== HEADER CHECKBOX: INDETERMINATE ===================== */
+
+  useEffect(() => {
+    if (headerCheckboxRef.current) {
+      headerCheckboxRef.current.indeterminate = someVisibleSelected;
+    }
+  }, [someVisibleSelected, allVisibleSelected, files, selectedIds]);
+
   /* ===================== RENDER ===================== */
 
   return (
     <div className="file-table-root">
 
-      {/* ================= FILTER BAR ================= */}
-      <div className="pedro-sticky-filter">
-        <div className="filter-row">
-          <select value={searchField} onChange={onFieldChange}>
-            <option value="artist">{t("FIELD_ARTIST")}</option>
-            <option value="album">{t("FIELD_ALBUM")}</option>
-            <option value="title">{t("FIELD_TITLE")}</option>
-          </select>
+      {/* ================= FIXED HEADER STACK ================= */}
+      <div className="pedro-fixed-header">
 
-          <input
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            placeholder={t("SEARCH_PLACEHOLDER")}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") onApply();
-            }}
-          />
+        {/* ================= FILTER BAR ================= */}
+        <div className="pedro-sticky-filter">
+          <div className="filter-row">
+            <select value={searchField} onChange={onFieldChange}>
+              <option value="artist">{t("FIELD_ARTIST")}</option>
+              <option value="album">{t("FIELD_ALBUM")}</option>
+              <option value="title">{t("FIELD_TITLE")}</option>
+            </select>
 
-          <button
-            className="btn btn-primary"
-            onClick={onApply}
-            disabled={!searchText}
-          >
-            {t("APPLY")}
-          </button>
-        </div>
+            <input
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              placeholder={t("SEARCH_PLACEHOLDER")}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") onApply();
+              }}
+            />
 
-        <div className="filter-row alpha">
-          {"ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map(letter => (
             <button
-              key={letter}
-              className="btn btn-sm btn-outline-dark"
-              onClick={() => onAlphaClick(letter)}
+              className="btn btn-primary"
+              onClick={onApply}
+              disabled={!searchText}
             >
-              {letter}
+              {t("APPLY")}
             </button>
-          ))}
+          </div>
 
-          <button
-            className="btn btn-sm btn-outline-dark"
-            onClick={() => onAlphaClick("#")}
-          >
-            #
-          </button>
+          <div className="filter-row alpha">
+            {"ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map((letter) => (
+              <button
+                key={letter}
+                className="alpha-btn"
+                onClick={() => onAlphaClick(letter)}
+              >
+                {letter}
+              </button>
+            ))}
 
-          <div className="spacer" />
+            <button
+              className="alpha-btn alpha-all"
+              onClick={() => onAlphaClick("#")}
+            >
+              #
+            </button>
 
-          <button
-            className="btn btn-sm btn-outline-secondary"
-            onClick={onClearFilters}
-          >
-            {t("CLEAR_FILTERS")}
-          </button>
+            <div className="spacer" />
+
+            <button
+              className="btn-clear-filters"
+              onClick={onClear}
+            >
+              {t("CLEAR_FILTERS")}
+            </button>
+
+            {onGoToApply && (
+              <button
+                className="btn btn-sm btn-danger"
+                style={{ marginLeft: 10 }}
+                onClick={onGoToApply}
+              >
+                ⚠️ {t("APPLY_DELETIONS")}
+              </button>
+            )}
+          </div>
         </div>
-      </div>
 
-      {/* ================= BULK EDIT BAR ================= */}
-      <div className={`pedro-sticky-bulk ${bulkEnabled ? "" : "disabled"}`}>
-        <div className="bulk-row primary">
-          <input placeholder={t("FIELD_ARTIST")} disabled />
-          <input placeholder={t("FIELD_ALBUM")} disabled />
-          <input placeholder={t("FIELD_ALBUM_ARTIST")} disabled />
-          <input placeholder={t("FIELD_YEAR")} disabled />
-          <input placeholder={t("FIELD_BPM")} disabled />
-          <input
-            placeholder={t("FIELD_DISC")}
-            disabled={!bulkEnabled}
-            value={bulkEdit.disc}
-            onChange={e =>
-              setBulkEdit(p => ({ ...p, disc: e.target.value }))
-            }
+        {/* ================= BULK BAR ================= */}
+        <div className="pedro-sticky-bulk">
+          <BulkSelectionToolbar
+            selectedCount={selectedCount}
+            onApplyBulkEdit={applyBulkEdits}
+            onMarkForDeletion={markBulkForDeletion}
+            onClearSelection={clearSelection}
           />
         </div>
 
-        <div className="bulk-row secondary">
-          <label>
-            <input type="checkbox" disabled />
-            {t("FIELD_COMPILATION")}
-          </label>
-
-          <label className="mark-delete">
-            <input type="checkbox" disabled />
-            {t("MARK_FOR_DELETION")}
-          </label>
-
-          <button
-            disabled={!bulkEnabled}
-            onClick={applyBulkEdits}
-          >
-            {t("APPLY")}
-          </button>
+        {/* ================= TABLE HEADER ================= */}
+        <div className="pedro-sticky-header table-header">
+          <div className="col-check">
+            <input
+              ref={headerCheckboxRef}
+              type="checkbox"
+              checked={allVisibleSelected}
+              onChange={(e) => toggleSelectAllVisible(e.target.checked)}
+            />
+          </div>
+          <div className="col-id">ID</div>
+          <div className="col-text">{t("FIELD_ARTIST")}</div>
+          <div className="col-text">{t("FIELD_TITLE")}</div>
+          <div className="col-text">{t("FIELD_ALBUM")}</div>
+          <div className="col-preview">{t("PREVIEW")}</div>
         </div>
-      </div>
 
-      {/* ================= TABLE HEADER ================= */}
-      <div className="pedro-sticky-header table-header">
-        <div className="col-check" />
-        <div className="col-id">ID</div>
-        <div className="col-text">{t("FIELD_ARTIST")}</div>
-        <div className="col-text">{t("FIELD_TITLE")}</div>
-        <div className="col-text">{t("FIELD_ALBUM")}</div>
-        <div className="col-preview">{t("PREVIEW")}</div>
-      </div>
+      </div> {/* end pedro-fixed-header */}
 
-      {/* ================= BODY ================= */}
+      {/* ================= SCROLL BODY ================= */}
       <div className="pedro-scroll-body">
 
         {showLegend && (
@@ -336,10 +353,10 @@ export default function FileTable() {
           <div className="table-error">{error}</div>
         )}
 
-        {!loading && rows.length > 0 && (
+        {!loading && files.length > 0 && (
           <table>
             <tbody>
-              {rows.map(row => {
+              {files.map((row) => {
                 const isSelected = selectedIds.has(row.id);
                 const isExpanded = row.id === singleSelectedId;
                 const edit = edits[row.id] || {};
@@ -369,7 +386,7 @@ export default function FileTable() {
                         )}
                       </td>
 
-                      {["artist", "title", "album"].map(field => (
+                      {["artist", "title", "album"].map((field) => (
                         <td key={field} className="col-text">
                           {isExpanded ? (
                             <input
@@ -379,7 +396,7 @@ export default function FileTable() {
                                   : ""
                               }
                               value={edit[field] ?? row[field] ?? ""}
-                              onChange={e =>
+                              onChange={(e) =>
                                 updateEdit(row.id, field, e.target.value)
                               }
                             />
@@ -391,6 +408,10 @@ export default function FileTable() {
 
                       <td className="col-preview">
                         <button
+                          className={[
+                            "preview",
+                            isPlaying ? "playing" : "",
+                          ].join(" ")}
                           onClick={() =>
                             isPlaying
                               ? pause()
@@ -420,7 +441,7 @@ export default function FileTable() {
                                 key={field}
                                 placeholder={t(key)}
                                 value={edit[field] ?? row[field] ?? ""}
-                                onChange={e =>
+                                onChange={(e) =>
                                   updateEdit(row.id, field, e.target.value)
                                 }
                                 className={
