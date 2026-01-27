@@ -264,3 +264,92 @@ Formal contribution guidelines will follow.
 
 Pedro Organiza is built for people who care about their music libraries
 and want to understand them before changing them.
+================================
+Development Status (v0.3.x)
+
+Pedro Organiza is currently in an active stabilization phase focused on making the system safe and scalable for very large real-world libraries.
+
+As of v0.3.0, the project has reached a stable UI and API baseline on top of which execution and planning features will be built.
+
+Key Characteristics of v0.3.0
+
+Safe by default for large libraries
+* The UI no longer loads the full file table on startup.
+* Files are only fetched after explicit filtering.
+* This allows Pedro to operate safely with libraries of 30k–100k+ tracks without exhausting memory or freezing the UI.
+
+Database-first editing model
+* All metadata edits are applied immediately to the SQLite database via API.
+* Tag and genre edits are applied immediately to linking tables.
+* The database is always the source of truth.
+* No metadata or tag changes are deferred to an “Apply” phase.
+
+Explicit execution boundary
+In Pedro 1.0:
+* The Apply phase does not handle metadata or tags.
+* The Apply Engine will only handle:
+  + Physical deletion of files marked with mark_delete = 1
+  + Deletion of corresponding database rows
+  + Generation of timestamped apply reports
+* No moves, copies, or transcodes are performed in v1.
+
+This strict separation ensures:
+* Metadata is always reversible.
+* Destructive operations are explicit, auditable, and isolated.
+
+UI maturity
+The main FileTable and bulk editing workflow are now considered structurally stable:
+* Scalable selection model with visible-only bulk selection
+* Compact bulk edit toolbar integrated into the native layout
+* Indeterminate header checkbox for partial selections
+* No legacy selection overlays
+* Native dark theme fully restored
+* Internationalization cleaned and consistent (mostly)
+
+This UI baseline is intended to remain stable while execution features are added.
+
+What Is Implemented Today
+* Full ingestion pipeline to SQLite (stable)
+* Alias clustering and duplicate detection (stable)
+* Tag and genre management (stable)
+* React UI for:
+  + Filtering large libraries
+  + Editing metadata
+  + Applying tags
+  + Previewing tracks
+  + Bulk metadata edits
+  + Marking files for deletion (staging only)
+
+No filesystem mutation occurs during normal UI usage.
+------
+What Is Not Implemented Yet
+The following are intentionally not implemented as of v0.3.x:
+* Apply Engine v1 (physical deletion)
+* Dry-run apply reports
+* Action planner UI
+* Move / copy / transcode operations
+* Canonical resolution workflows
+
+These are planned for upcoming releases and will be introduced conservatively.
+
+Intended Audience (Current Phase)
+Pedro Organiza is currently best suited for users who:
+* Have large, messy music libraries
+* Are comfortable with:
+  + Python
+  + SQLite
+  + Inspecting databases directly
+* Want to analyze and clean their library before executing destructive actions
+* Value auditability and control over automation
+
+Stability Note
+* Database schema is considered stable for v0.3.x.
+* API contracts used by the UI are now considered stable.
+* UI layout protocol (pedro-fixed-header, sticky stack, scroll body) is now fixed.
+
+Future development will focus on:
+* Apply Engine v1
+* Dry-run execution reports
+* Execution audit trail UI
+* Planning workflows
+
