@@ -61,7 +61,7 @@ from backend.startup_service import (
 from backend.consolidate_music import analyze_files
 from backend.startup_validation import validate_startup_plan
 from backend.startup_persistence import save_last_run_plan, load_last_run_plan
-
+from backend.db_state import get_active_db
 
 # ===================== ENV =====================
 
@@ -74,19 +74,16 @@ load_dotenv()
 
 # ---------- PATCH: central active DB resolver ----------
 
-def get_active_db_path() -> str:
-    path = os.getenv("MUSIC_DB")
-    if not path:
-        raise RuntimeError("MUSIC_DB_NOT_SET")
-    return path
+from backend.active_db import get_active_db
+from backend.paths import (
+    LAST_RUN_PLAN_PATH,
+    LAST_DRY_RUN_REPORT_PATH,
+    APPLY_REPORT_DIR,
+    ACTIVE_DB_PATH,
+    SCAN_LOCK_PATH,
+)
 
-# ---------- PATCH: last run plan persistence ----------
-
-LAST_RUN_PLAN_PATH = os.path.expanduser("~/.config/pedro/last_run_plan.json")
-SCAN_LOCK_PATH = "/tmp/pedro_scan.lock"
-LAST_DRY_RUN_REPORT_PATH = os.path.expanduser("~/.config/pedro/last_dry_run_report.json")
-APPLY_REPORT_DIR = os.path.expanduser("~/.config/pedro/apply_reports")
-
+from backend.db_state import set_active_db
 
 # ===================== APP =====================
 
@@ -113,13 +110,17 @@ def save_last_dry_run_report(report: dict):
         json.dump(report, f, indent=2)
 
 # ---------- PATCH: DB always resolved at runtime ----------
+def get_active_db_path() -> str:
+    path = get_active_db()
+    if not path:
+        raise RuntimeError("MUSIC_DB_NOT_SET")
+    return path
 
 def get_db():
     path = get_active_db_path()
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     return conn
-
 # ===================== MODELS =====================
 
 class FileSummary(BaseModel):
@@ -801,7 +802,6 @@ def api_inspect_source(payload: InspectSourcePayload):
         "inspection": info,
     }
 
-
 @app.post("/startup/inspect-db")
 def startup_inspect_db(payload: StartupInspectPayload):
     db_path = payload.db_path
@@ -937,7 +937,60 @@ def startup_rescan_db(payload: StartupRescanPayload):
         "db_mode": payload.db_mode,
     }
 
-# ===================== STARTUP =====================
+@app.post("/startup/set-database")
+def startup_set_database(payload: StartupActivatePayload):
+
+    db_path = payload.db_path
+
+    if not db_path:
+        return {
+            "status": "error",
+            "error": "NO_DB_PATH_PROVIDED",
+        }
+
+    if not os.path.exists(db_path):
+        return {
+            "status": "error",
+            "error": "DB_FILE_NOT_FOUND",
+            "db_path": db_path,
+        }
+
+    # Validate Pedro DB
+    try:
+        info = inspect_pedro_db(db_path)
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": "INSPECTION_FAILED",
+            "details": str(e),
+        }
+
+    if not info.get("is_pedro_db"):
+        return {
+            "status": "error",
+            "error": "NOT_PEDRO_DB",
+            "inspection": info,
+        }
+
+    # ✅ Persist active database (cross-process, cross-platform)
+    set_active_db(db_path)
+
+    return {
+        "status": "ok",
+        "db_path": db_path,
+        "inspection": info,
+    }
+
+
+
+def save_active_db(path: str):
+    os.makedirs(os.path.dirname(ACTIVE_DB_PATH), exist_ok=True)
+    with open(ACTIVE_DB_PATH, "w", encoding="utf-8") as f:
+        json.dump({
+            "db_path": path,
+            "set_at": utcnow(),
+        }, f, indent=2)
+
 
 @app.post("/startup/inspect-target")
 def startup_inspect_target(payload: InspectTargetPayload):
@@ -1140,5 +1193,7 @@ def save_apply_report(report: ApplyRunReport) -> str:
         json.dump(report.dict(), f, indent=2)
 
     return path
+
+
 
 # ===================== END =====================

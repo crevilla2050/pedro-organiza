@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pedro-organiza"
-version = "0.1.0"
+version = "0.3.0"
 requires-python = ">=3.9"
 
 [project.scripts]
-pedro = "cli.pedro_cli:main"
+pedro = "cli.main:main"
 
 [tool.setuptools]
-packages = ["cli"]
+packages = ["cli", "backend"]
 
 [tool.ruff]
 line-length = 88

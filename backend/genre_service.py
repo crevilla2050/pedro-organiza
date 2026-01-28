@@ -17,6 +17,7 @@ messages and present results in a UI.
 """
 
 import re
+import fnmatch
 from datetime import datetime, timezone
 
 # ================= I18N MESSAGE KEYS =================
@@ -27,6 +28,7 @@ MSG_GENRE_CREATED = "GENRE_CREATED"
 MSG_GENRE_MAPPING_CREATED = "GENRE_MAPPING_CREATED"
 MSG_FILE_GENRE_LINKED = "FILE_GENRE_LINKED"
 MSG_PREVIEW_ONLY = "PREVIEW_ONLY"
+MSG_GENRES_LISTED = "GENRES_LISTED"
 
 # ====================================================
 
@@ -56,6 +58,120 @@ def split_genres(raw: str):
         return []
     return [g.strip() for g in re.split(r"[;,/]", raw) if g.strip()]
 
+def normalize_genres(
+    conn,
+    source_genre_names: list[str],
+    target_genre_name: str,
+    apply: bool = False,
+    clear_previous: bool = False,
+):
+    """
+    Normalize multiple canonical genres into a target canonical genre.
+
+    Behavior:
+    - Exact genre name matching only (no wildcards)
+    - By default: APPEND target genre
+    - With clear_previous: REPLACE source genres with target
+    - Never deletes canonical genres
+    - Never mutates files.genre
+    """
+
+    c = conn.cursor()
+
+    stats = {
+        "source_genres": source_genre_names,
+        "target_genre": target_genre_name,
+        "files_affected": 0,
+        "links_added": 0,
+        "links_removed": 0,
+        "preview": not apply,
+    }
+
+    # ---- Resolve target genre (create if needed) ----
+    res = ensure_genre(conn, target_genre_name)
+    target_genre_id = res["genre_id"]
+
+    # ---- Resolve source genre IDs (exact match only) ----
+    placeholders = ",".join("?" for _ in source_genre_names)
+
+    rows = c.execute(
+        f"""
+        SELECT id, name
+        FROM genres
+        WHERE name IN ({placeholders})
+        """,
+        source_genre_names,
+    ).fetchall()
+
+    if not rows:
+        return {
+            "key": MSG_NO_GENRES_FOUND,
+            "stats": stats,
+        }
+
+    source_ids = [r["id"] for r in rows]
+
+    # ---- Find affected files ----
+    file_rows = c.execute(
+        f"""
+        SELECT DISTINCT file_id
+        FROM file_genres
+        WHERE genre_id IN ({",".join("?" for _ in source_ids)})
+        """,
+        source_ids,
+    ).fetchall()
+
+    file_ids = [r["file_id"] for r in file_rows]
+    stats["files_affected"] = len(file_ids)
+
+    # ---- Apply changes ----
+    for file_id in file_ids:
+        if clear_previous:
+            if apply:
+                cur = c.execute(
+                    f"""
+                    DELETE FROM file_genres
+                    WHERE file_id = ?
+                      AND genre_id IN ({",".join("?" for _ in source_ids)})
+                    """,
+                    (file_id, *source_ids),
+                )
+                stats["links_removed"] += cur.rowcount
+            else:
+                # Preview: count how many would be removed
+                cur = c.execute(
+                    f"""
+                    SELECT COUNT(*) AS cnt
+                    FROM file_genres
+                    WHERE file_id = ?
+                      AND genre_id IN ({",".join("?" for _ in source_ids)})
+                    """,
+                    (file_id, *source_ids),
+                ).fetchone()
+                stats["links_removed"] += cur["cnt"]
+
+        # Add target genre link
+        if apply:
+            c.execute(
+                """
+                INSERT OR IGNORE INTO file_genres (
+                    file_id, genre_id, source, confidence, created_at
+                )
+                VALUES (?, ?, 'normalize', 1.0, ?)
+                """,
+                (file_id, target_genre_id, utcnow()),
+            )
+            stats["links_added"] += c.rowcount
+        else:
+            stats["links_added"] += 1
+
+    if apply:
+        conn.commit()
+
+    return {
+        "key": "GENRES_NORMALIZED",
+        "stats": stats,
+    }
 
 # ====================================================
 # Core service functions
@@ -90,34 +206,29 @@ def load_raw_genre_tokens(conn):
 
 
 def ensure_genre(conn, name, source="user"):
-    """
-    Create canonical genre if it doesn't exist.
-    Returns genre_id.
-    """
     c = conn.cursor()
     norm = normalize_token(name)
 
-    # Create a canonical genre row if missing. We store both the
-    # original `name` and a `normalized_name` for deterministic lookups.
-    c.execute("""
-        INSERT OR IGNORE INTO genres (
-            name, normalized_name, source, created_at
-        )
-        VALUES (?, ?, ?, ?)
-    """, (name, norm, source, utcnow()))
-
-    # Return the canonical id for the normalized token so callers can
-    # reference it when creating mappings or linking files.
-    row = c.execute(
+    existing = c.execute(
         "SELECT id FROM genres WHERE normalized_name=?",
         (norm,)
     ).fetchone()
 
+    if existing:
+        return {
+            "key": "GENRE_EXISTS",
+            "genre_id": existing["id"]
+        }
+
+    c.execute("""
+        INSERT INTO genres (name, normalized_name, source, created_at)
+        VALUES (?, ?, ?, ?)
+    """, (name, norm, source, utcnow()))
+
     return {
         "key": MSG_GENRE_CREATED,
-        "genre_id": row["id"]
+        "genre_id": c.lastrowid
     }
-
 
 def map_raw_genre(conn, raw_token, genre_id=None, source="user", apply=True):
     """
@@ -244,4 +355,103 @@ def genres_for_selection(conn, file_ids: list[int]):
         "applied": applied,
         "partial": partial,
         "available": available,
+    }
+
+import fnmatch
+
+def list_genres(conn, pattern="*"):
+    """
+    List canonical genres matching a wildcard pattern.
+    Includes file usage count.
+
+    Returns message key + structured data (no formatting here).
+    """
+    c = conn.cursor()
+
+    rows = c.execute("""
+        SELECT
+            g.id,
+            g.name,
+            g.normalized_name,
+            COUNT(fg.file_id) AS file_count
+        FROM genres g
+        LEFT JOIN file_genres fg ON fg.genre_id = g.id
+        GROUP BY g.id
+        ORDER BY g.name
+    """).fetchall()
+
+    matched = []
+
+    for r in rows:
+        if (
+            fnmatch.fnmatchcase(r["name"], pattern)
+            or fnmatch.fnmatchcase(r["normalized_name"], pattern.lower())
+        ):
+            matched.append({
+                "id": r["id"],
+                "name": r["name"],
+                "normalized_name": r["normalized_name"],
+                "file_count": r["file_count"],
+            })
+
+    return {
+        "key": MSG_GENRES_LISTED,
+        "data": matched,
+        "pattern": pattern,
+        "count": len(matched),
+    }
+
+def find_empty_genres(conn):
+    c = conn.cursor()
+
+    rows = c.execute("""
+        SELECT g.id, g.name, g.normalized_name
+        FROM genres g
+        LEFT JOIN file_genres fg ON fg.genre_id = g.id
+        WHERE fg.genre_id IS NULL
+        ORDER BY g.name
+    """).fetchall()
+
+    return {
+        "key": "EMPTY_GENRES_FOUND",
+        "data": [
+            {
+                "id": r["id"],
+                "name": r["name"],
+                "normalized_name": r["normalized_name"],
+            }
+            for r in rows
+        ],
+        "count": len(rows),
+    }
+
+def purge_empty_genres(conn, apply=True):
+    c = conn.cursor()
+
+    empty = c.execute("""
+        SELECT g.id, g.name
+        FROM genres g
+        LEFT JOIN file_genres fg ON fg.genre_id = g.id
+        WHERE fg.genre_id IS NULL
+    """).fetchall()
+
+    if not apply:
+        return {
+            "key": "EMPTY_GENRES_PREVIEW",
+            "count": len(empty),
+            "genres": [r["name"] for r in empty],
+            "preview": True,
+        }
+
+    ids = [r["id"] for r in empty]
+
+    if ids:
+        placeholders = ",".join("?" for _ in ids)
+        c.execute(f"DELETE FROM genres WHERE id IN ({placeholders})", ids)
+        conn.commit()
+
+    return {
+        "key": "EMPTY_GENRES_PURGED",
+        "count": len(ids),
+        "preview": False,
     }
