@@ -6,8 +6,6 @@ from backend.genre_service import (
     purge_empty_genres,
 )
 
-from backend.i18n.messages import msg
-
 from backend.genre_discovery import discover_genres
 from backend.i18n.messages import msg
 from backend.genre_service import normalize_genres
