@@ -9,11 +9,13 @@ from backend.genre_service import (
 from backend.genre_discovery import discover_genres
 from backend.i18n.messages import msg
 from backend.genre_service import normalize_genres
+from backend.reports.taxonomy_report import write_taxonomy_report
+
 
 def register_genres_commands(subparsers):
     genres = subparsers.add_parser(
         "genres",
-        help="Manage and inspect genres"
+        help=msg("GENRES_CMD_HELP")
     )
 
     genres_sub = genres.add_subparsers(
@@ -21,97 +23,85 @@ def register_genres_commands(subparsers):
         required=True
     )
 
-    # ----------------------------
-    # genres list
-    # ----------------------------
-
     list_cmd = genres_sub.add_parser(
         "list",
-        help="List canonical genres (supports wildcards *, ?)"
+        help=msg("GENRES_LIST_HELP")
     )
 
     list_cmd.add_argument(
         "pattern",
         nargs="?",
         default="*",
-        help="Wildcard pattern (e.g. '*metal*')"
+        help=msg("GENRES_LIST_PATTERN_HELP")
     )
-
-    # ----------------------------
-    # genres discover
-    # ----------------------------
 
     discover_cmd = genres_sub.add_parser(
         "discover",
-        help="Discover genres from file metadata and populate canonical tables"
+        help=msg("GENRES_DISCOVER_HELP")
     )
 
     discover_cmd.add_argument(
         "--dry-run",
         action="store_true",
-        help="Preview changes without modifying the database"
+        help=msg("GENRES_DISCOVER_DRY_RUN_HELP")
     )
 
     discover_cmd.add_argument(
         "--clear-previous",
         action="store_true",
-        help="Clear existing genre mappings before discovery"
+        help=msg("GENRES_DISCOVER_CLEAR_HELP")
     )
-
-    # ----------------------------
-    # genres normalize (stub for now)
-    # ----------------------------
 
     normalize_cmd = genres_sub.add_parser(
         "normalize",
-        help="Normalize multiple genres into a canonical one"
+        help=msg("GENRES_NORMALIZE_HELP")
     )
 
     normalize_cmd.add_argument(
         "genres",
         nargs="+",
-        help="Exact genre names to normalize (no wildcards)"
+        help=msg("GENRES_NORMALIZE_SOURCES_HELP")
     )
 
     normalize_cmd.add_argument(
         "--to",
         required=True,
-        help="Target canonical genre name"
+        help=msg("GENRES_NORMALIZE_TARGET_HELP")
     )
 
     normalize_cmd.add_argument(
         "--apply-genres",
         action="store_true",
-        help="Apply changes to the database (otherwise preview only)"
+        help=msg("GENRES_NORMALIZE_APPLY_HELP")
     )
 
     normalize_cmd.add_argument(
         "--clear-previous",
         action="store_true",
-        help="Replace existing genres instead of appending"
+        help=msg("GENRES_NORMALIZE_CLEAR_HELP")
     )
 
     cleanup_cmd = genres_sub.add_parser(
         "cleanup",
-        help="Inspect or purge empty (unused) genres"
+        help=msg("GENRES_CLEANUP_HELP")
     )
 
     cleanup_cmd.add_argument(
         "--list-empty",
         action="store_true",
-        help="List genres with no files assigned"
+        help=msg("GENRES_CLEANUP_LIST_HELP")
     )
 
     cleanup_cmd.add_argument(
         "--purge-empty",
         action="store_true",
-        help="Delete genres with no files assigned"
+        help=msg("GENRES_CLEANUP_PURGE_HELP")
     )
 
     cleanup_cmd.add_argument(
         "--apply-genres",
         action="store_true",
-        help="Apply destructive changes (otherwise preview only)"
+        help=msg("GENRES_CLEANUP_APPLY_HELP")
     )
 
     return genres
@@ -144,6 +134,26 @@ def handle_genres(args, conn):
             clear_previous=args.clear_previous,
         )
 
+        stats = result["stats"]
+
+        report_path, _ = write_taxonomy_report(
+            taxonomy="genres",
+            operation="normalize",
+            preview=stats["preview"],
+            parameters={
+                "source_genres": stats["source_genres"],
+                "target_genre": stats["target_genre"],
+                "clear_previous": args.clear_previous,
+            },
+            summary={
+                "files_affected": stats["files_affected"],
+                "links_added": stats["links_added"],
+                "links_removed": stats["links_removed"],
+                "canonical_created": False,
+                "canonical_removed": 0,
+            },
+        )
+
         if getattr(args, "raw", False):
             print(result)
             return
@@ -157,6 +167,8 @@ def handle_genres(args, conn):
         print(f"- links added: {stats.get('links_added', 0)}")
         print(f"- links removed: {stats.get('links_removed', 0)}")
         print(f"- preview: {stats.get('preview')}")
+        print(f"- report: {report_path}")
+
 
     elif args.genres_command == "cleanup":
         if args.list_empty:
@@ -175,3 +187,26 @@ def handle_genres(args, conn):
             print(msg(result["key"]))
             print(f"- removed: {result['count']}")
             print(f"- preview: {result['preview']}")
+    
+    elif args.genres_command == "discover":
+        stats = discover_genres(
+            conn,
+            apply=not args.dry_run,
+            clear_previous=args.clear_previous,
+        )
+
+        report_path, _ = write_taxonomy_report(
+            taxonomy="genres",
+            operation="discover",
+            preview=args.dry_run,
+            parameters={
+                "clear_previous": args.clear_previous,
+            },
+            summary=stats,
+        )
+
+        print(msg("GENRE_DISCOVERY_COMPLETE"))
+        for k, v in stats.items():
+            print(f"- {k}: {v}")
+        print(f"- report: {report_path}")
+
