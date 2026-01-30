@@ -640,6 +640,28 @@ def create_db(db_path):
         created_at TEXT NOT NULL,
         last_update TEXT NOT NULL
     );
+                    
+    CREATE TABLE IF NOT EXISTS tags (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        normalized_name TEXT NOT NULL UNIQUE,
+        source TEXT DEFAULT 'user',
+        created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS file_tags (
+        file_id INTEGER NOT NULL,
+        tag_id INTEGER NOT NULL,
+        source TEXT DEFAULT 'user',
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (file_id, tag_id),
+        FOREIGN KEY (file_id) REFERENCES files(id),
+        FOREIGN KEY (tag_id) REFERENCES tags(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_tags_norm ON tags(normalized_name);
+    CREATE INDEX IF NOT EXISTS idx_file_tags_file ON file_tags(file_id);
+    CREATE INDEX IF NOT EXISTS idx_file_tags_tag ON file_tags(tag_id);
 
     CREATE INDEX IF NOT EXISTS idx_genres_norm ON genres(normalized_name);
     CREATE INDEX IF NOT EXISTS idx_file_genres_file ON file_genres(file_id);
