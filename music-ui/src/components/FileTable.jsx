@@ -13,6 +13,8 @@ export default function FileTable({
   onApplySearch,
   onAlpha,
   onGoToApply,
+  onSelectionChange,
+  onUpdateFile,
 }) {
   /* ===================== LOCAL FILTER STATE ===================== */
 
@@ -36,8 +38,6 @@ export default function FileTable({
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [edits, setEdits] = useState({});
 
-  /* ---------- Derived selection ---------- */
-
   const selectedCount = selectedIds.size;
   const selectedArray = Array.from(selectedIds);
 
@@ -46,8 +46,6 @@ export default function FileTable({
 
   const bulkSelectedIds =
     selectedCount >= 2 ? selectedArray : [];
-
-  /* ---------- NEW: visible selection helpers ---------- */
 
   const visibleIds = files.map((r) => r.id);
 
@@ -74,17 +72,11 @@ export default function FileTable({
   const toggleSelectAllVisible = (checked) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-
       if (checked) {
-        for (const id of visibleIds) {
-          next.add(id);
-        }
+        visibleIds.forEach((id) => next.add(id));
       } else {
-        for (const id of visibleIds) {
-          next.delete(id);
-        }
+        visibleIds.forEach((id) => next.delete(id));
       }
-
       return next;
     });
   };
@@ -114,7 +106,7 @@ export default function FileTable({
     );
   };
 
-  /* ===================== SEARCH HANDLERS ===================== */
+  /* ===================== SEARCH ===================== */
 
   const onApply = () => {
     if (!searchText) return;
@@ -140,7 +132,7 @@ export default function FileTable({
     setEdits({});
   };
 
-  /* ===================== PATCH HELPERS ===================== */
+  /* ===================== PATCH ===================== */
 
   const applyRowEdits = async (rowId) => {
     const payload = edits[rowId];
@@ -157,6 +149,8 @@ export default function FileTable({
 
       await res.json();
 
+      onUpdateFile(rowId, payload);
+
       setEdits((prev) => {
         const next = { ...prev };
         delete next[rowId];
@@ -168,7 +162,7 @@ export default function FileTable({
     }
   };
 
-  /* ===================== BULK ACTIONS ===================== */
+  /* ===================== BULK ===================== */
 
   const applyBulkEdits = async (fields) => {
     if (bulkSelectedIds.length < 2) return;
@@ -225,23 +219,30 @@ export default function FileTable({
     }
   };
 
-  /* ===================== HEADER CHECKBOX: INDETERMINATE ===================== */
+  /* ===================== EFFECTS ===================== */
+
+  useEffect(() => {
+    if (!onSelectionChange) return;
+
+    onSelectionChange({
+      entityType: "file",
+      entityIds: Array.from(selectedIds),
+    });
+  }, [selectedIds, onSelectionChange]);
 
   useEffect(() => {
     if (headerCheckboxRef.current) {
       headerCheckboxRef.current.indeterminate = someVisibleSelected;
     }
-  }, [someVisibleSelected, allVisibleSelected, files, selectedIds]);
+  }, [someVisibleSelected, allVisibleSelected]);
 
   /* ===================== RENDER ===================== */
 
   return (
     <div className="file-table-root">
 
-      {/* ================= FIXED HEADER STACK ================= */}
       <div className="pedro-fixed-header">
 
-        {/* ================= FILTER BAR ================= */}
         <div className="pedro-sticky-filter">
           <div className="filter-row">
             <select value={searchField} onChange={onFieldChange}>
@@ -307,7 +308,6 @@ export default function FileTable({
           </div>
         </div>
 
-        {/* ================= BULK BAR ================= */}
         <div className="pedro-sticky-bulk">
           <BulkSelectionToolbar
             selectedCount={selectedCount}
@@ -317,14 +317,15 @@ export default function FileTable({
           />
         </div>
 
-        {/* ================= TABLE HEADER ================= */}
         <div className="pedro-sticky-header table-header">
           <div className="col-check">
             <input
               ref={headerCheckboxRef}
               type="checkbox"
               checked={allVisibleSelected}
-              onChange={(e) => toggleSelectAllVisible(e.target.checked)}
+              onChange={(e) =>
+                toggleSelectAllVisible(e.target.checked)
+              }
             />
           </div>
           <div className="col-id">ID</div>
@@ -334,9 +335,8 @@ export default function FileTable({
           <div className="col-preview">{t("PREVIEW")}</div>
         </div>
 
-      </div> {/* end pedro-fixed-header */}
+      </div>
 
-      {/* ================= SCROLL BODY ================= */}
       <div className="pedro-scroll-body">
 
         {showLegend && (
@@ -345,13 +345,8 @@ export default function FileTable({
           </div>
         )}
 
-        {loading && (
-          <div className="table-hint">{t("SEARCHING")}</div>
-        )}
-
-        {error && (
-          <div className="table-error">{error}</div>
-        )}
+        {loading && <div className="table-hint">{t("SEARCHING")}</div>}
+        {error && <div className="table-error">{error}</div>}
 
         {!loading && files.length > 0 && (
           <table>
@@ -375,6 +370,7 @@ export default function FileTable({
                         <input
                           type="checkbox"
                           checked={isSelected}
+                          onClick={(e) => e.stopPropagation()}
                           onChange={() => toggleSelect(row.id)}
                         />
                       </td>
@@ -397,7 +393,11 @@ export default function FileTable({
                               }
                               value={edit[field] ?? row[field] ?? ""}
                               onChange={(e) =>
-                                updateEdit(row.id, field, e.target.value)
+                                updateEdit(
+                                  row.id,
+                                  field,
+                                  e.target.value
+                                )
                               }
                             />
                           ) : (
@@ -412,20 +412,36 @@ export default function FileTable({
                             "preview",
                             isPlaying ? "playing" : "",
                           ].join(" ")}
-                          onClick={() =>
+                          onClick={(e) => {
+                            e.stopPropagation();
                             isPlaying
                               ? pause()
-                              : playTrack(row.id, { preview: true })
-                          }
+                              : playTrack(row.id, { preview: true });
+                          }}
                         >
                           {isPlaying ? "❚❚" : "▶"}
                         </button>
 
-                        <button onClick={() => seekBy(-10)}>−10</button>
-                        <button onClick={() => seekBy(10)}>+10</button>
-                      </td>
-                    </tr>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            seekBy(-10);
+                          }}
+                        >
+                          −10
+                        </button>
 
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            seekBy(10);
+                          }}
+                        >
+                          +10
+                        </button>
+                      </td>
+
+                    </tr>
                     {isExpanded && (
                       <tr className="expanded">
                         <td colSpan={6}>
@@ -442,10 +458,15 @@ export default function FileTable({
                                 placeholder={t(key)}
                                 value={edit[field] ?? row[field] ?? ""}
                                 onChange={(e) =>
-                                  updateEdit(row.id, field, e.target.value)
+                                  updateEdit(
+                                    row.id,
+                                    field,
+                                    e.target.value
+                                  )
                                 }
                                 className={
-                                  (edit[field] ?? "") !== (row[field] ?? "")
+                                  (edit[field] ?? "") !==
+                                  (row[field] ?? "")
                                     ? "input-dirty"
                                     : ""
                                 }
@@ -457,7 +478,9 @@ export default function FileTable({
                             {isRowDirty(row) && (
                               <button
                                 className="btn btn-primary"
-                                onClick={() => applyRowEdits(row.id)}
+                                onClick={() =>
+                                  applyRowEdits(row.id)
+                                }
                               >
                                 {t("APPLY")}
                               </button>

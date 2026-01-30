@@ -219,6 +219,13 @@ export default function App() {
             onApplySearch={applySearch}
             onAlpha={applyAlpha}
             onGoToApply={() => setPhase("apply")}
+            onUpdateFile={(id, patch) => {
+              setFiles(prev =>
+                prev.map(row =>
+                  row.id === id ? { ...row, ...patch } : row
+                )
+              );
+            }}
           />
         </main>
       </div>

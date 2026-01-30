@@ -34,6 +34,9 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Literal
 from dotenv import load_dotenv
 
+from fastapi import Header
+import mimetypes
+
 from tools.new_pedro_tagger import pedro_enrich_file
 from backend.alias_engine import clusters_as_records
 
@@ -110,17 +113,28 @@ def save_last_dry_run_report(report: dict):
         json.dump(report, f, indent=2)
 
 # ---------- PATCH: DB always resolved at runtime ----------
+from backend.db_state import get_active_db
+
 def get_active_db_path() -> str:
     path = get_active_db()
     if not path:
         raise RuntimeError("MUSIC_DB_NOT_SET")
     return path
 
+
 def get_db():
     path = get_active_db_path()
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     return conn
+
+@app.on_event("startup")
+def ensure_active_db():
+    from backend.db_state import get_active_db
+    if not get_active_db():
+        print("⚠️  No active database set.")
+        print("   Run: pedro db-set <path>")
+
 # ===================== MODELS =====================
 
 class FileSummary(BaseModel):
@@ -250,7 +264,91 @@ EDITABLE_FIELDS = {
     "mark_delete",
 }
 
+# ===================== STARTUP: VERIFY DB =====================
+
+@app.on_event("startup")
+def verify_db():
+    try:
+        get_active_db_path()
+    except RuntimeError:
+        print("⚠️ No active music database set. API will reject requests.")
+
 # ===================== FILES =====================
+
+from fastapi import Header
+from fastapi.responses import StreamingResponse
+import os
+import mimetypes
+
+@app.get("/audio/{file_id}")
+def stream_audio(file_id: int, range: str | None = Header(default=None)):
+    """
+    HTTP range-capable audio streaming endpoint.
+    Required for HTML5 <audio> playback and seeking.
+    """
+
+    conn = get_db()
+    row = conn.execute(
+        "SELECT original_path FROM files WHERE id = ?",
+        (file_id,)
+    ).fetchone()
+    conn.close()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="FILE_NOT_FOUND")
+
+    path = row["original_path"]
+
+    if not path or not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="FILE_MISSING_ON_DISK")
+
+    file_size = os.path.getsize(path)
+    content_type, _ = mimetypes.guess_type(path)
+    content_type = content_type or "audio/mpeg"
+
+    # ---------- No Range header: stream whole file ----------
+    if range is None:
+        return StreamingResponse(
+            open(path, "rb"),
+            media_type=content_type,
+            headers={
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(file_size),
+            },
+        )
+
+    # ---------- Parse Range header ----------
+    try:
+        units, value = range.split("=")
+        start_str, end_str = value.split("-")
+        start = int(start_str)
+        end = int(end_str) if end_str else file_size - 1
+    except Exception:
+        raise HTTPException(status_code=416, detail="INVALID_RANGE")
+
+    if start >= file_size:
+        raise HTTPException(status_code=416, detail="RANGE_NOT_SATISFIABLE")
+
+    end = min(end, file_size - 1)
+    chunk_size = end - start + 1
+
+    def iter_file():
+        with open(path, "rb") as f:
+            f.seek(start)
+            yield f.read(chunk_size)
+
+    headers = {
+        "Content-Range": f"bytes {start}-{end}/{file_size}",
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(chunk_size),
+    }
+
+    return StreamingResponse(
+        iter_file(),
+        status_code=206,
+        media_type=content_type,
+        headers=headers,
+    )
 
 @app.get("/files", response_model=List[FileSummary])
 def list_files(
@@ -586,6 +684,13 @@ def search_files(
 
     return [dict(r) for r in rows]
 
+@app.get("/side-panel/genres")
+def side_panel_genres(entity_type: str, entity_ids: str):
+    if entity_type != "file":
+        raise HTTPException(400, "Unsupported entity type")
+
+    file_ids = [int(x) for x in entity_ids.split(",") if x]
+    return genres_for_selection(get_db(), file_ids)
 
 
 # ===================== SINGLE FILE =====================
@@ -980,6 +1085,41 @@ def startup_set_database(payload: StartupActivatePayload):
         "db_path": db_path,
         "inspection": info,
     }
+
+@app.post("/side-panel/genres/apply")
+def apply_genres(payload: dict):
+    file_ids = payload["entity_ids"]
+    genre_ids = payload["genre_ids"]
+
+    c = get_db().cursor()
+
+    for file_id in file_ids:
+        for genre_id in genre_ids:
+            c.execute("""
+                INSERT OR IGNORE INTO file_genres
+                (file_id, genre_id, source, confidence, created_at)
+                VALUES (?, ?, 'ui', 1.0, ?)
+            """, (file_id, genre_id, utcnow()))
+
+    get_db().commit()
+    return {"status": "ok"}
+
+@app.post("/side-panel/genres/remove")
+def remove_genres(payload: dict):
+    file_ids = payload["entity_ids"]
+    genre_ids = payload["genre_ids"]
+
+    c = get_db().cursor()
+
+    for file_id in file_ids:
+        c.execute(f"""
+            DELETE FROM file_genres
+            WHERE file_id = ?
+              AND genre_id IN ({",".join("?" for _ in genre_ids)})
+        """, (file_id, *genre_ids))
+
+    get_db().commit()
+    return {"status": "ok"}
 
 
 
