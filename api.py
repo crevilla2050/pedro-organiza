@@ -369,7 +369,6 @@ def list_files(
     - Always limited by `limit` (default 500, max 2000).
     """
 
-    # ---------- Hard guard: refuse unfiltered full-table fetch ----------
     if not any([artist, album_artist, album, title, genre, mark_delete is not None]):
         raise HTTPException(
             status_code=400,
@@ -381,8 +380,7 @@ def list_files(
     clauses = []
     params = []
 
-    # ---------- Build dynamic WHERE clause ----------
-
+    # ---------- Text filters ----------
     if artist:
         clauses.append("artist LIKE ?")
         params.append(f"%{artist}%")
@@ -403,11 +401,11 @@ def list_files(
         clauses.append("mark_delete = ?")
         params.append(1 if mark_delete else 0)
 
-    # Optional: genre filter via file_genres join
+    # ---------- Genre filter (AND-safe) ----------
     if genre:
         clauses.append("""
             id IN (
-                SELECT file_id
+                SELECT fg.file_id
                 FROM file_genres fg
                 JOIN genres g ON fg.genre_id = g.id
                 WHERE g.name LIKE ?
@@ -632,11 +630,15 @@ def startup_last_run_plan():
             "details": str(e),
         }
 
+from typing import Optional
+from fastapi import Query, HTTPException
+
 @app.get("/files/search")
 def search_files(
     q: Optional[str] = Query(None),
     field: str = Query("artist"),
     starts_with: Optional[str] = Query(None),
+    genres: Optional[str] = Query(None),   # 👈 comma-separated
     limit: int = Query(200),
 ):
     if field not in {"artist", "album", "title"}:
@@ -645,23 +647,41 @@ def search_files(
     conn = get_db()
     cur = conn.cursor()
 
-    where = []
+    clauses = []
     params = []
 
     if q:
-        where.append(f"{field} LIKE ?")
+        clauses.append(f"{field} LIKE ?")
         params.append(f"%{q}%")
 
     if starts_with:
         if starts_with == "#":
-            where.append(f"{field} GLOB '[0-9]*'")
+            clauses.append(f"{field} GLOB '[0-9]*'")
         else:
-            where.append(f"{field} LIKE ?")
+            clauses.append(f"{field} LIKE ?")
             params.append(f"{starts_with}%")
 
+    # ---------- GENRE FILTER ----------
+    if genres:
+        genre_list = [g.strip() for g in genres.split(",") if g.strip()]
+
+        if genre_list:
+            placeholders = ",".join("?" for _ in genre_list)
+
+            clauses.append(f"""
+                id IN (
+                    SELECT fg.file_id
+                    FROM file_genres fg
+                    JOIN genres g ON fg.genre_id = g.id
+                    WHERE g.name IN ({placeholders})
+                )
+            """)
+
+            params.extend(genre_list)
+
     where_sql = ""
-    if where:
-        where_sql = "WHERE " + " AND ".join(where)
+    if clauses:
+        where_sql = "WHERE " + " AND ".join(clauses)
 
     sql = f"""
         SELECT
@@ -684,13 +704,33 @@ def search_files(
 
     return [dict(r) for r in rows]
 
-@app.get("/side-panel/genres")
-def side_panel_genres(entity_type: str, entity_ids: str):
-    if entity_type != "file":
-        raise HTTPException(400, "Unsupported entity type")
 
-    file_ids = [int(x) for x in entity_ids.split(",") if x]
-    return genres_for_selection(get_db(), file_ids)
+# ===================== TAGS & GENRES =====================
+@app.get("/genres")
+def get_genres(include_usage: bool = False):
+    conn = get_db()
+    cur = conn.cursor()
+
+    if include_usage:
+        rows = cur.execute("""
+            SELECT
+                g.id,
+                g.name,
+                COUNT(fg.file_id) AS file_count
+            FROM genres g
+            LEFT JOIN file_genres fg ON fg.genre_id = g.id
+            GROUP BY g.id
+            ORDER BY g.name COLLATE NOCASE
+        """).fetchall()
+    else:
+        rows = cur.execute("""
+            SELECT id, name
+            FROM genres
+            ORDER BY name COLLATE NOCASE
+        """).fetchall()
+
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 # ===================== SINGLE FILE =====================
@@ -1086,41 +1126,69 @@ def startup_set_database(payload: StartupActivatePayload):
         "inspection": info,
     }
 
-@app.post("/side-panel/genres/apply")
-def apply_genres(payload: dict):
+@app.get("/side-panel/genres")
+def side_panel_genres(entity_type: str, entity_ids: str = ""):
+    if entity_type != "file":
+        raise HTTPException(400, "Unsupported entity type")
+
+    conn = get_db()
+
+    # FILTER MODE: no selection → return ALL genres
+    if not entity_ids:
+        rows = conn.execute("""
+            SELECT id, name
+            FROM genres
+            ORDER BY name COLLATE NOCASE
+        """).fetchall()
+        conn.close()
+
+        return {
+            "applied": [],
+            "partial": [],
+            "available": [dict(r) for r in rows],
+        }
+
+    # EDIT MODE
+    file_ids = [int(x) for x in entity_ids.split(",") if x]
+    data = genres_for_selection(conn, file_ids)
+    conn.close()
+    return data
+
+
+@app.post("/side-panel/genres/update")
+def update_genres(payload: dict):
     file_ids = payload["entity_ids"]
-    genre_ids = payload["genre_ids"]
+    add_ids = payload.get("add", [])
+    remove_ids = payload.get("remove", [])
 
-    c = get_db().cursor()
+    conn = get_db()
+    c = conn.cursor()
 
-    for file_id in file_ids:
-        for genre_id in genre_ids:
-            c.execute("""
-                INSERT OR IGNORE INTO file_genres
-                (file_id, genre_id, source, confidence, created_at)
-                VALUES (?, ?, 'ui', 1.0, ?)
-            """, (file_id, genre_id, utcnow()))
+    try:
+        for file_id in file_ids:
+            for genre_id in add_ids:
+                c.execute("""
+                    INSERT OR IGNORE INTO file_genres
+                    (file_id, genre_id, source, confidence, created_at)
+                    VALUES (?, ?, 'ui', 1.0, ?)
+                """, (file_id, genre_id, utcnow()))
 
-    get_db().commit()
+            if remove_ids:
+                c.execute(
+                    f"""
+                    DELETE FROM file_genres
+                    WHERE file_id = ?
+                      AND genre_id IN ({",".join("?" for _ in remove_ids)})
+                    """,
+                    (file_id, *remove_ids),
+                )
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
     return {"status": "ok"}
-
-@app.post("/side-panel/genres/remove")
-def remove_genres(payload: dict):
-    file_ids = payload["entity_ids"]
-    genre_ids = payload["genre_ids"]
-
-    c = get_db().cursor()
-
-    for file_id in file_ids:
-        c.execute(f"""
-            DELETE FROM file_genres
-            WHERE file_id = ?
-              AND genre_id IN ({",".join("?" for _ in genre_ids)})
-        """, (file_id, *genre_ids))
-
-    get_db().commit()
-    return {"status": "ok"}
-
 
 
 def save_active_db(path: str):

@@ -6,6 +6,7 @@ import StartupPage from "./startup/StartupPage";
 import ApplyStep from "./startup/steps/ApplyStep";
 import DoneStep from "./startup/steps/DoneStep";
 import FileTable from "./components/FileTable";
+import GenresPanel from "./components/GenresPanel";
 
 import { t } from "./i18n";
 import pedroLogo from "./assets/logo.png";
@@ -20,7 +21,7 @@ export default function App() {
 
   /* ===================== MAIN WORKFLOW ===================== */
 
-  const [phase, setPhase] = useState("table"); // "table" | "apply" | "done"
+  const [phase, setPhase] = useState("table");
   const [lastApplyReport, setLastApplyReport] = useState(null);
 
   /* ===================== FILE TABLE STATE ===================== */
@@ -29,31 +30,77 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  /* ===================== SIDE PANEL UI ===================== */
+  /* ===================== SIDE PANEL ===================== */
 
   const [panelSide, setPanelSide] = useState("left");
   const [panelOpen, setPanelOpen] = useState(true);
 
+  /* ===================== SELECTION ===================== */
+
+  const [selection, setSelection] = useState({
+    entityType: "file",
+    entityIds: [],
+  });
+
+  /* ===================== GENRE FILTER STATE ===================== */
+
+  const [activeGenres, _setActiveGenres] = useState(new Set());
+
+  const setActiveGenres = (updater) => {
+    _setActiveGenres(prev => {
+      if (updater instanceof Set) return updater;
+      if (typeof updater === "function") {
+        const next = updater(prev);
+        return next instanceof Set ? next : prev;
+      }
+      return prev; // ignore invalid writes
+    });
+  };
+
+  const [genreQuery, setGenreQuery] = useState("");  
+  const [filterMode, setFilterMode] = useState(true); // true = no file selection
+
+  /* ---------- switch filter/edit mode ---------- */
+  useEffect(() => {
+    setFilterMode(selection.entityIds.length === 0);
+  }, [selection]);
+
   /* ===================== INITIAL LOAD ===================== */
 
   useEffect(() => {
-    // Load initial file list once we enter main UI
     if (!showLanding && !showStartup) {
-      loadInitialFiles();
+      setFiles([]);
+      setLoading(false);
+      setError(null);
     }
   }, [showLanding, showStartup]);
 
-  const loadInitialFiles = async () => {
-    // Initial state: do NOT load any files.
-    // Files will only be loaded when the user applies a filter.
 
-    setFiles([]);
-    setLoading(false);
+  /* ===================== FILE TABLE ACTIONS ===================== */  
+  useEffect(() => {
+    if (activeGenres.size === 0) return;
+
+    const genresParam = Array.from(activeGenres).join(",");
+
+    setLoading(true);
     setError(null);
-  };
+
+    fetch(
+      `${API_BASE}/files/search?genres=${encodeURIComponent(genresParam)}`
+    )
+      .then(res => res.json())
+      .then(setFiles)
+      .catch(e => setError(String(e)))
+      .finally(() => setLoading(false));
+  }, [activeGenres]);
 
 
-  /* ===================== SEARCH / ALPHA WIRING ===================== */
+  /* ===================== SEARCH / ALPHA ===================== */
+
+  const buildGenreParam = () =>
+    activeGenres.size
+      ? `&genres=${encodeURIComponent([...activeGenres].join(","))}`
+      : "";
 
   const applySearch = async (q, field) => {
     setLoading(true);
@@ -61,13 +108,11 @@ export default function App() {
 
     try {
       const res = await fetch(
-        `${API_BASE}/files/search?q=${encodeURIComponent(q)}&field=${field}`
+        `${API_BASE}/files/search?q=${encodeURIComponent(q)}&field=${field}${buildGenreParam()}`
       );
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-      const data = await res.json();
-      setFiles(data);
+      setFiles(await res.json());
     } catch (e) {
       console.error("Search failed:", e);
       setError(String(e));
@@ -82,13 +127,11 @@ export default function App() {
 
     try {
       const res = await fetch(
-        `${API_BASE}/files/search?starts_with=${encodeURIComponent(letter)}&field=${field}`
+        `${API_BASE}/files/search?starts_with=${encodeURIComponent(letter)}&field=${field}${buildGenreParam()}`
       );
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-      const data = await res.json();
-      setFiles(data);
+      setFiles(await res.json());
     } catch (e) {
       console.error("Alpha search failed:", e);
       setError(String(e));
@@ -97,7 +140,7 @@ export default function App() {
     }
   };
 
-  /* ===================== LANDING PAGE ===================== */
+  /* ===================== LANDING ===================== */
 
   if (showLanding) {
     return (
@@ -114,19 +157,9 @@ export default function App() {
     );
   }
 
-  /* ===================== STARTUP WIZARD ===================== */
-
   if (showStartup) {
-    return (
-      <StartupPage
-        onComplete={() => {
-          setShowStartup(false);
-        }}
-      />
-    );
+    return <StartupPage onComplete={() => setShowStartup(false)} />;
   }
-
-  /* ===================== APPLY PHASE ===================== */
 
   if (phase === "apply") {
     return (
@@ -164,10 +197,7 @@ export default function App() {
         {/* ===================== SIDE PANEL ===================== */}
         <aside
           className={`side-panel ${panelOpen ? "open" : "collapsed"}`}
-          style={{
-            width: panelOpen ? 260 : 20,
-            minWidth: panelOpen ? 260 : 20,
-          }}
+          style={{ width: panelOpen ? 260 : 20 }}
         >
           <div className="side-panel-logo">
             <img
@@ -178,36 +208,12 @@ export default function App() {
           </div>
 
           {panelOpen && (
-            <div className="side-panel-controls">
-              <label>
-                <input
-                  type="checkbox"
-                  checked={panelSide === "right"}
-                  onChange={(e) =>
-                    setPanelSide(e.target.checked ? "right" : "left")
-                  }
-                />
-                Panel on right
-              </label>
-
-              <label>
-                <input
-                  type="checkbox"
-                  checked={panelOpen}
-                  onChange={(e) => setPanelOpen(e.target.checked)}
-                />
-                Panel visible
-              </label>
-            </div>
+            <GenresPanel
+              selection={selection}
+              activeGenres={activeGenres}
+              onFilterGenres={setActiveGenres}
+            />
           )}
-
-          <div style={{ flex: 1 }} />
-
-          <div className="mini-player">
-            <button>⏮</button>
-            <button>▶</button>
-            <button>⏭</button>
-          </div>
         </aside>
 
         {/* ===================== MAIN CONTENT ===================== */}
@@ -219,9 +225,10 @@ export default function App() {
             onApplySearch={applySearch}
             onAlpha={applyAlpha}
             onGoToApply={() => setPhase("apply")}
+            onSelectionChange={setSelection}
             onUpdateFile={(id, patch) => {
-              setFiles(prev =>
-                prev.map(row =>
+              setFiles((prev) =>
+                prev.map((row) =>
                   row.id === id ? { ...row, ...patch } : row
                 )
               );
