@@ -1,0 +1,2 @@
+Deferred UX feature (Pedro 1.1):
+Reintroduce expandable file rows in list view to display secondary metadata (year, BPM, disc info, etc.) inline, without cluttering the main table. Backend already supports required fields.

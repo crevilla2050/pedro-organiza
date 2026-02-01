@@ -1,0 +1,11 @@
+{
+  "language": "es",
+  "versions": {
+    "normalization": "v1.0",
+    "signals": "v1.0",
+    "grouping": "v1.0"
+  },
+  "ui": {
+    "translate": true
+  }
+}

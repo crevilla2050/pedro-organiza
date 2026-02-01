@@ -1,0 +1,38 @@
+{
+  "ERROR_DB_NOT_SET": "Datenbank nicht konfiguriert (MUSIC_DB nicht gesetzt)",
+  "ERROR_DB_NOT_FOUND": "Datenbank nicht gefunden unter {path}",
+
+  "CSV_EXPORT_DONE": "CSV exportiert nach {path} ({count} Einträge)",
+  "CSV_IMPORT_DONE": "{count} geplante Aktionen aus CSV importiert",
+  "INVALID_ACTION_SKIPPED": "Zeile {id} übersprungen: ungültige Aktion '{action}'",
+  "NO_ACTIONS_IMPORTED": "Keine Aktionen importiert",
+
+  "REVIEW_START": "Überprüfung von {count} Dateien gestartet",
+  "NO_FILES_TO_REVIEW": "Keine Dateien zur Überprüfung",
+  "REVIEW_EXITING": "Überprüfung wird sicher beendet",
+  "INVALID_OPTION": "Ungültige Auswahl",
+  "ACTION_PLANNED": "Aktion geplant: {action}",
+  "NOTE_SAVED": "Notiz gespeichert",
+  "PATH_UPDATED": "Zielpfad aktualisiert",
+  "REVIEW_COMPLETE": "Überprüfung abgeschlossen",
+
+  "SANITY_CHECK_HEADER": "Pedro Organiza — Konsistenzprüfung",
+  "SANITY_DB_PATH": "Verwendete Datenbank: {path}",
+  "SANITY_TOTAL_FILES": "Gesamtanzahl Dateien: {count}",
+  "SANITY_LIFECYCLE_DISTRIBUTION": "Lebenszyklus-Verteilung",
+  "SANITY_ACTION_DISTRIBUTION": "Aktionsverteilung",
+  "SANITY_ACTION_STATUS_DISTRIBUTION": "Aktionsstatus-Verteilung",
+  "SANITY_ORPHAN_ACTIONS": "Verwaiste Aktionen gefunden: {count}",
+  "SANITY_MULTIPLE_PENDING_ACTIONS": "Dateien mit mehreren ausstehenden Aktionen: {count}",
+  "SANITY_MISSING_DST": "Move-Aktionen ohne Ziel: {count}",
+  "SANITY_SHA_CLUSTERS": "SHA-256-Duplikatcluster: {count}",
+  "SANITY_FP_CLUSTERS": "Fingerprint-Duplikatcluster: {count}",
+  "SANITY_ERRORS": "Dateien im Fehlerzustand: {count}",
+  "SANITY_DONE": "Konsistenzprüfung abgeschlossen",
+
+  "CLEANUP_INVALID_TARGET": "Ungültiges Zielverzeichnis",
+  "CLEANUP_MODE_CONFLICT": "Bitte entweder --apply oder --dry-run wählen",
+  "CLEANUP_SCAN_RESULT": "Verzeichnisse für Bereinigung geeignet: {count}",
+  "CLEANUP_CANDIDATE_DIR": "Kandidatenverzeichnis: {path}",
+  "CLEANUP_PLANNED_AND_REMOVED": "Bereinigung geplant: {planned}, entfernt: {removed}"
+}

@@ -1,0 +1,38 @@
+{
+  "ERROR_DB_NOT_SET": "Base de datos no configurada (MUSIC_DB no definido)",
+  "ERROR_DB_NOT_FOUND": "Base de datos no encontrada en {path}",
+
+  "CSV_EXPORT_DONE": "CSV exportado a {path} ({count} filas)",
+  "CSV_IMPORT_DONE": "Se importaron {count} acciones planeadas desde el CSV",
+  "INVALID_ACTION_SKIPPED": "Fila {id} omitida: acción inválida '{action}'",
+  "NO_ACTIONS_IMPORTED": "No se importaron acciones",
+
+  "REVIEW_START": "Iniciando revisión de {count} archivos",
+  "NO_FILES_TO_REVIEW": "No hay archivos para revisar",
+  "REVIEW_EXITING": "Saliendo de la revisión de forma segura",
+  "INVALID_OPTION": "Opción inválida",
+  "ACTION_PLANNED": "Acción planeada: {action}",
+  "NOTE_SAVED": "Nota guardada",
+  "PATH_UPDATED": "Ruta propuesta actualizada",
+  "REVIEW_COMPLETE": "Revisión completada",
+
+  "SANITY_CHECK_HEADER": "Pedro Organiza — Verificación de coherencia",
+  "SANITY_DB_PATH": "Usando base de datos: {path}",
+  "SANITY_TOTAL_FILES": "Archivos totales: {count}",
+  "SANITY_LIFECYCLE_DISTRIBUTION": "Distribución de ciclo de vida",
+  "SANITY_ACTION_DISTRIBUTION": "Distribución de acciones",
+  "SANITY_ACTION_STATUS_DISTRIBUTION": "Estado de acciones",
+  "SANITY_ORPHAN_ACTIONS": "Acciones huérfanas detectadas: {count}",
+  "SANITY_MULTIPLE_PENDING_ACTIONS": "Archivos con múltiples acciones pendientes: {count}",
+  "SANITY_MISSING_DST": "Acciones de mover sin destino: {count}",
+  "SANITY_SHA_CLUSTERS": "Clusters duplicados SHA-256: {count}",
+  "SANITY_FP_CLUSTERS": "Clusters de huellas digitales: {count}",
+  "SANITY_ERRORS": "Archivos en estado de error: {count}",
+  "SANITY_DONE": "Verificación completada",
+
+  "CLEANUP_INVALID_TARGET": "Directorio objetivo inválido",
+  "CLEANUP_MODE_CONFLICT": "Elija solo --apply o --dry-run",
+  "CLEANUP_SCAN_RESULT": "Directorios candidatos para limpieza: {count}",
+  "CLEANUP_CANDIDATE_DIR": "Directorio candidato: {path}",
+  "CLEANUP_PLANNED_AND_REMOVED": "Limpieza planeada: {planned}, eliminados: {removed}"
+}

@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
+
 import { PlaybackProvider } from "./context/PlaybackContext";
 
 import LandingPage from "./LandingPage";
@@ -7,6 +8,7 @@ import ApplyStep from "./startup/steps/ApplyStep";
 import DoneStep from "./startup/steps/DoneStep";
 import FileTable from "./components/FileTable";
 import GenresPanel from "./components/GenresPanel";
+import FilterBar from "./components/FilterBar";
 
 import { t } from "./i18n";
 import pedroLogo from "./assets/logo.png";
@@ -14,26 +16,18 @@ import pedroLogo from "./assets/logo.png";
 const API_BASE = "http://127.0.0.1:8000";
 
 export default function App() {
-  /* ===================== STARTUP GATE ===================== */
+  /* ===================== STARTUP ===================== */
 
   const [showLanding, setShowLanding] = useState(true);
   const [showStartup, setShowStartup] = useState(false);
-
-  /* ===================== MAIN WORKFLOW ===================== */
-
   const [phase, setPhase] = useState("table");
   const [lastApplyReport, setLastApplyReport] = useState(null);
 
-  /* ===================== FILE TABLE STATE ===================== */
+  /* ===================== FILE DATA ===================== */
 
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-
-  /* ===================== SIDE PANEL ===================== */
-
-  const [panelSide, setPanelSide] = useState("left");
-  const [panelOpen, setPanelOpen] = useState(true);
 
   /* ===================== SELECTION ===================== */
 
@@ -42,105 +36,81 @@ export default function App() {
     entityIds: [],
   });
 
-  /* ===================== GENRE FILTER STATE ===================== */
+  /* ===================== SIDE PANEL ===================== */
 
-  const [activeGenres, _setActiveGenres] = useState(new Set());
+  const [panelSide] = useState("left");
+  const [panelOpen] = useState(true);
 
-  const setActiveGenres = (updater) => {
-    _setActiveGenres(prev => {
-      if (updater instanceof Set) return updater;
-      if (typeof updater === "function") {
-        const next = updater(prev);
-        return next instanceof Set ? next : prev;
-      }
-      return prev; // ignore invalid writes
+  /* ===================== GLOBAL FILTER STATE ===================== */
+
+  const [filters, setFilters] = useState({
+    q: "",
+    field: "artist",
+    starts_with: null,
+    genres: new Set(),
+  });
+
+  const clearFilters = () => {
+    setFilters({
+      q: "",
+      field: "artist",
+      starts_with: null,
+      genres: new Set(),
     });
   };
 
-  const [genreQuery, setGenreQuery] = useState("");  
-  const [filterMode, setFilterMode] = useState(true); // true = no file selection
+  const onGenresChange = useCallback((updater) => {
+    setFilters(prev => {
+      const nextGenres =
+        typeof updater === "function"
+          ? updater(prev.genres)
+          : updater;
 
-  /* ---------- switch filter/edit mode ---------- */
+      return {
+        ...prev,
+        genres: nextGenres,
+      };
+    });
+  }, []);
+
+  /* ===================== FETCH FILES ===================== */
+
   useEffect(() => {
-    setFilterMode(selection.entityIds.length === 0);
-  }, [selection]);
+    const params = new URLSearchParams();
 
-  /* ===================== INITIAL LOAD ===================== */
-
-  useEffect(() => {
-    if (!showLanding && !showStartup) {
-      setFiles([]);
-      setLoading(false);
-      setError(null);
+    if (filters.q) {
+      params.set("q", filters.q);
+      params.set("field", filters.field);
     }
-  }, [showLanding, showStartup]);
 
+    if (filters.starts_with) {
+      params.set("starts_with", filters.starts_with);
+      params.set("field", filters.field);
+    }
 
-  /* ===================== FILE TABLE ACTIONS ===================== */  
-  useEffect(() => {
-    if (activeGenres.size === 0) return;
+    if (filters.genres.size > 0) {
+      params.set("genres", [...filters.genres].join(","));
+    }
 
-    const genresParam = Array.from(activeGenres).join(",");
+    if ([...params.keys()].length === 0) {
+      setFiles([]);
+      return;
+    }
 
     setLoading(true);
     setError(null);
 
-    fetch(
-      `${API_BASE}/files/search?genres=${encodeURIComponent(genresParam)}`
-    )
-      .then(res => res.json())
+    fetch(`${API_BASE}/files/search?${params.toString()}`)
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
       .then(setFiles)
       .catch(e => setError(String(e)))
       .finally(() => setLoading(false));
-  }, [activeGenres]);
+  }, [filters]);
 
-
-  /* ===================== SEARCH / ALPHA ===================== */
-
-  const buildGenreParam = () =>
-    activeGenres.size
-      ? `&genres=${encodeURIComponent([...activeGenres].join(","))}`
-      : "";
-
-  const applySearch = async (q, field) => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const res = await fetch(
-        `${API_BASE}/files/search?q=${encodeURIComponent(q)}&field=${field}${buildGenreParam()}`
-      );
-
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setFiles(await res.json());
-    } catch (e) {
-      console.error("Search failed:", e);
-      setError(String(e));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const applyAlpha = async (letter, field) => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const res = await fetch(
-        `${API_BASE}/files/search?starts_with=${encodeURIComponent(letter)}&field=${field}${buildGenreParam()}`
-      );
-
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setFiles(await res.json());
-    } catch (e) {
-      console.error("Alpha search failed:", e);
-      setError(String(e));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  /* ===================== LANDING ===================== */
+  /* ===================== LANDING / STARTUP ===================== */
 
   if (showLanding) {
     return (
@@ -194,7 +164,7 @@ export default function App() {
           flexDirection: panelSide === "left" ? "row" : "row-reverse",
         }}
       >
-        {/* ===================== SIDE PANEL ===================== */}
+        {/* SIDE PANEL */}
         <aside
           className={`side-panel ${panelOpen ? "open" : "collapsed"}`}
           style={{ width: panelOpen ? 260 : 20 }}
@@ -210,30 +180,33 @@ export default function App() {
           {panelOpen && (
             <GenresPanel
               selection={selection}
-              activeGenres={activeGenres}
-              onFilterGenres={setActiveGenres}
+              activeGenres={filters.genres}
+              onFilterGenres={onGenresChange}
             />
           )}
         </aside>
 
-        {/* ===================== MAIN CONTENT ===================== */}
+        {/* MAIN CONTENT */}
         <main className="main-content" style={{ flex: 1, minWidth: 0 }}>
-          <FileTable
-            files={files}
-            loading={loading}
-            error={error}
-            onApplySearch={applySearch}
-            onAlpha={applyAlpha}
-            onGoToApply={() => setPhase("apply")}
-            onSelectionChange={setSelection}
-            onUpdateFile={(id, patch) => {
-              setFiles((prev) =>
-                prev.map((row) =>
-                  row.id === id ? { ...row, ...patch } : row
-                )
-              );
-            }}
-          />
+          <div className="file-table-container">
+            <FilterBar filters={filters} setFilters={setFilters} />
+
+            <FileTable
+              files={files}
+              loading={loading}
+              error={error}
+              onClearFilters={clearFilters}
+              onGoToApply={() => setPhase("apply")}
+              onSelectionChange={setSelection}
+              onUpdateFile={(id, patch) => {
+                setFiles(prev =>
+                  prev.map(row =>
+                    row.id === id ? { ...row, ...patch } : row
+                  )
+                );
+              }}
+            />
+          </div>
         </main>
       </div>
     </PlaybackProvider>

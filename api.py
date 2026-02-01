@@ -291,18 +291,20 @@ import os
 import mimetypes
 
 @app.get("/audio/{file_id}")
-def stream_audio(file_id: int, range: str | None = Header(default=None)):
+def stream_audio(
+    file_id: int,
+    range: str | None = Header(default=None),
+    conn: sqlite3.Connection = Depends(get_db),
+):
     """
     HTTP range-capable audio streaming endpoint.
     Required for HTML5 <audio> playback and seeking.
     """
 
-    conn = get_db()
     row = conn.execute(
         "SELECT original_path FROM files WHERE id = ?",
         (file_id,)
     ).fetchone()
-    conn.close()
 
     if not row:
         raise HTTPException(status_code=404, detail="FILE_NOT_FOUND")
@@ -316,7 +318,7 @@ def stream_audio(file_id: int, range: str | None = Header(default=None)):
     content_type, _ = mimetypes.guess_type(path)
     content_type = content_type or "audio/mpeg"
 
-    # ---------- No Range header: stream whole file ----------
+    # ---------- No Range header ----------
     if range is None:
         return StreamingResponse(
             open(path, "rb"),
@@ -360,6 +362,7 @@ def stream_audio(file_id: int, range: str | None = Header(default=None)):
         headers=headers,
     )
 
+
 @app.get("/files", response_model=List[FileSummary])
 def list_files(
     artist: Optional[str] = Query(None),
@@ -369,7 +372,9 @@ def list_files(
     genre: Optional[str] = Query(None),
     mark_delete: Optional[bool] = Query(None),
     limit: int = Query(500, ge=1, le=2000),
+    conn: sqlite3.Connection = Depends(get_db),
 ):
+
     """
     Safe file listing endpoint.
 
@@ -384,8 +389,6 @@ def list_files(
             status_code=400,
             detail="At least one filter must be provided to list files"
         )
-
-    conn = get_db()
 
     clauses = []
     params = []
@@ -442,7 +445,6 @@ def list_files(
     params.append(limit)
 
     rows = conn.execute(sql, params).fetchall()
-    conn.close()
 
     return [FileSummary(**dict(r)) for r in rows]
 
@@ -648,13 +650,10 @@ def search_files(
     q: Optional[str] = Query(None),
     field: str = Query("artist"),
     starts_with: Optional[str] = Query(None),
-    genres: Optional[str] = Query(None),   # 👈 comma-separated
+    genres: Optional[str] = Query(None),
     limit: int = Query(200),
+    conn: sqlite3.Connection = Depends(get_db),
 ):
-    if field not in {"artist", "album", "title"}:
-        raise HTTPException(status_code=400, detail="INVALID_FIELD")
-
-    conn = get_db()
     cur = conn.cursor()
 
     clauses = []
@@ -710,15 +709,17 @@ def search_files(
     params.append(limit)
 
     rows = cur.execute(sql, params).fetchall()
-    conn.close()
+    # conn.close()
 
     return [dict(r) for r in rows]
 
 
 # ===================== TAGS & GENRES =====================
 @app.get("/genres")
-def get_genres(include_usage: bool = False):
-    conn = get_db()
+def get_genres(
+    include_usage: bool = False,
+    conn: sqlite3.Connection = Depends(get_db),
+):
     cur = conn.cursor()
 
     if include_usage:
@@ -739,7 +740,6 @@ def get_genres(include_usage: bool = False):
             ORDER BY name COLLATE NOCASE
         """).fetchall()
 
-    conn.close()
     return [dict(r) for r in rows]
 
 
@@ -747,7 +747,11 @@ def get_genres(include_usage: bool = False):
 # (UNCHANGED FROM YOUR VERSION)
 
 @app.patch("/files/{file_id}")
-def update_file(file_id: int, payload: FileUpdatePayload):
+def update_file(
+    file_id: int,
+    payload: FileUpdatePayload,
+    conn: sqlite3.Connection = Depends(get_db),
+):
     data = payload.dict(exclude_unset=True)
 
     if not data:
@@ -777,21 +781,24 @@ def update_file(file_id: int, payload: FileUpdatePayload):
         SET {", ".join(fields)}
         WHERE id = ?
     """
-
-    conn = get_db()
+    
     cur = conn.cursor()
     cur.execute(sql, params)
     conn.commit()
 
     if cur.rowcount == 0:
-        conn.close()
+        #conn.close()
         raise HTTPException(status_code=404, detail="FILE_NOT_FOUND")
 
-    conn.close()
+    #conn.close()
     return {"status": "ok", "updated": cur.rowcount}
 
 @app.patch("/files/bulk")
-def bulk_update_files(payload: BulkUpdatePayload):
+def bulk_update_files(
+    payload: BulkUpdatePayload,
+    conn: sqlite3.Connection = Depends(get_db),
+):
+
     ids = payload.ids
     fields_data = payload.fields
 
@@ -827,12 +834,11 @@ def bulk_update_files(payload: BulkUpdatePayload):
         WHERE id IN ({placeholders})
     """
 
-    conn = get_db()
+    
     cur = conn.cursor()
     cur.execute(sql, params)
     conn.commit()
     updated = cur.rowcount
-    conn.close()
 
     return {
         "status": "ok",
@@ -841,13 +847,14 @@ def bulk_update_files(payload: BulkUpdatePayload):
     }
 
 @app.get("/files/count")
-def files_count():
-    conn = get_db()
+@app.get("/files/count")
+def files_count(
+    conn: sqlite3.Connection = Depends(get_db),
+):
     row = conn.execute("""
         SELECT COUNT(*) AS cnt
         FROM files
     """).fetchone()
-    conn.close()
 
     return {
         "status": "ok",
@@ -981,7 +988,7 @@ def startup_inspect_db(payload: StartupInspectPayload):
             FROM pedro_environment
             WHERE id = 1
         """).fetchone()
-        conn.close()
+        #conn.close()
 
         if row:
             environment = {
@@ -1137,11 +1144,13 @@ def startup_set_database(payload: StartupActivatePayload):
     }
 
 @app.get("/side-panel/genres")
-def side_panel_genres(entity_type: str, entity_ids: str = ""):
+def side_panel_genres(
+    entity_type: str,
+    entity_ids: str = "",
+    conn: sqlite3.Connection = Depends(get_db),
+):
     if entity_type != "file":
         raise HTTPException(400, "Unsupported entity type")
-
-    conn = get_db()
 
     # FILTER MODE: no selection → return ALL genres
     if not entity_ids:
@@ -1150,7 +1159,7 @@ def side_panel_genres(entity_type: str, entity_ids: str = ""):
             FROM genres
             ORDER BY name COLLATE NOCASE
         """).fetchall()
-        conn.close()
+        #conn.close()
 
         return {
             "applied": [],
@@ -1161,17 +1170,18 @@ def side_panel_genres(entity_type: str, entity_ids: str = ""):
     # EDIT MODE
     file_ids = [int(x) for x in entity_ids.split(",") if x]
     data = genres_for_selection(conn, file_ids)
-    conn.close()
     return data
 
 
 @app.post("/side-panel/genres/update")
-def update_genres(payload: dict):
+def update_genres(
+    payload: dict,
+    conn: sqlite3.Connection = Depends(get_db),
+):
     file_ids = payload["entity_ids"]
     add_ids = payload.get("add", [])
     remove_ids = payload.get("remove", [])
 
-    conn = get_db()
     c = conn.cursor()
 
     try:
@@ -1227,7 +1237,6 @@ def api_normalize_genres(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.post("/startup/inspect-target")
 def startup_inspect_target(payload: InspectTargetPayload):
     info = inspect_target_dir(payload.src, payload.dst)
@@ -1255,7 +1264,10 @@ def startup_last_dry_run_report():
     }
 
 @app.post("/startup/apply", response_model=ApplyRunReport)
-def startup_apply(payload: ApplyRunPayload):
+def startup_apply(
+    payload: ApplyRunPayload,
+    conn: sqlite3.Connection = Depends(get_db),
+):
     started_at = utcnow()
     run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
@@ -1274,8 +1286,6 @@ def startup_apply(payload: ApplyRunPayload):
 
     if not os.path.exists(db_path):
         raise HTTPException(status_code=400, detail="ACTIVE_DB_MISSING")
-
-    conn = get_db()
 
     # ---------- Phase 1: Select candidates ----------
     candidates = select_delete_candidates(conn)

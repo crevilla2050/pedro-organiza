@@ -12,16 +12,15 @@ export default function FileTable({
   error,
   onApplySearch,
   onAlpha,
+  onClearFilters,
   onGoToApply,
   onSelectionChange,
   onUpdateFile,
 }) {
+
   /* ===================== LOCAL FILTER STATE ===================== */
 
-  const [searchText, setSearchText] = useState("");
-  const [searchField, setSearchField] = useState("artist");
-
-  const showLegend = !loading && files.length === 0 && !searchText;
+  const showLegend = !loading && files.length === 0;
 
   /* ===================== PLAYBACK ===================== */
 
@@ -106,32 +105,6 @@ export default function FileTable({
     );
   };
 
-  /* ===================== SEARCH ===================== */
-
-  const onApply = () => {
-    if (!searchText) return;
-    onApplySearch(searchText, searchField);
-  };
-
-  const onAlphaClick = (letter) => {
-    onAlpha(letter, searchField);
-  };
-
-  const onFieldChange = (e) => {
-    const newField = e.target.value;
-    setSearchField(newField);
-
-    if (searchText) {
-      onApplySearch(searchText, newField);
-    }
-  };
-
-  const onClear = () => {
-    setSearchText("");
-    setSelectedIds(new Set());
-    setEdits({});
-  };
-
   /* ===================== PATCH ===================== */
 
   const applyRowEdits = async (rowId) => {
@@ -195,7 +168,7 @@ export default function FileTable({
     }
   };
 
-  const markBulkForDeletion = async () => {
+  const markBulkForDeletion = async (_ignored = null) => {
     if (bulkSelectedIds.length === 0) return;
 
     try {
@@ -208,10 +181,12 @@ export default function FileTable({
         }),
       });
 
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text);
+      }
 
       await res.json();
-
       setSelectedIds(new Set());
     } catch (err) {
       console.error("Bulk mark-delete failed:", err);
@@ -240,74 +215,7 @@ export default function FileTable({
 
   return (
     <div className="file-table-root">
-
       <div className="pedro-fixed-header">
-
-        <div className="pedro-sticky-filter">
-          <div className="filter-row">
-            <select value={searchField} onChange={onFieldChange}>
-              <option value="artist">{t("FIELD_ARTIST")}</option>
-              <option value="album">{t("FIELD_ALBUM")}</option>
-              <option value="title">{t("FIELD_TITLE")}</option>
-            </select>
-
-            <input
-              value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
-              placeholder={t("SEARCH_PLACEHOLDER")}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") onApply();
-              }}
-            />
-
-            <button
-              className="btn btn-primary"
-              onClick={onApply}
-              disabled={!searchText}
-            >
-              {t("APPLY")}
-            </button>
-          </div>
-
-          <div className="filter-row alpha">
-            {"ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map((letter) => (
-              <button
-                key={letter}
-                className="alpha-btn"
-                onClick={() => onAlphaClick(letter)}
-              >
-                {letter}
-              </button>
-            ))}
-
-            <button
-              className="alpha-btn alpha-all"
-              onClick={() => onAlphaClick("#")}
-            >
-              #
-            </button>
-
-            <div className="spacer" />
-
-            <button
-              className="btn-clear-filters"
-              onClick={onClear}
-            >
-              {t("CLEAR_FILTERS")}
-            </button>
-
-            {onGoToApply && (
-              <button
-                className="btn btn-sm btn-danger"
-                style={{ marginLeft: 10 }}
-                onClick={onGoToApply}
-              >
-                ⚠️ {t("APPLY_DELETIONS")}
-              </button>
-            )}
-          </div>
-        </div>
-
         <div className="pedro-sticky-bulk">
           <BulkSelectionToolbar
             selectedCount={selectedCount}
@@ -316,7 +224,12 @@ export default function FileTable({
             onClearSelection={clearSelection}
           />
         </div>
-
+        <button
+          className="btn btn-sm btn-outline-secondary"
+          onClick={onClearFilters}
+        >
+          {t("CLEAR_FILTERS")}
+        </button>
         <div className="pedro-sticky-header table-header">
           <div className="col-check">
             <input
@@ -328,17 +241,17 @@ export default function FileTable({
               }
             />
           </div>
+          
           <div className="col-id">ID</div>
           <div className="col-text">{t("FIELD_ARTIST")}</div>
           <div className="col-text">{t("FIELD_TITLE")}</div>
           <div className="col-text">{t("FIELD_ALBUM")}</div>
+            
           <div className="col-preview">{t("PREVIEW")}</div>
+          
         </div>
-
       </div>
-
       <div className="pedro-scroll-body">
-
         {showLegend && (
           <div className="table-hint">
             <strong>35k+</strong> {t("REFINE_SEARCH_HINT")}
@@ -377,6 +290,7 @@ export default function FileTable({
 
                       <td className="col-id">
                         {row.id}
+
                         {isRowDirty(row) && (
                           <span className="dirty-star">*</span>
                         )}
@@ -458,21 +372,64 @@ export default function FileTable({
                                 placeholder={t(key)}
                                 value={edit[field] ?? row[field] ?? ""}
                                 onChange={(e) =>
-                                  updateEdit(
-                                    row.id,
-                                    field,
-                                    e.target.value
-                                  )
+                                  updateEdit(row.id, field, e.target.value)
                                 }
                                 className={
-                                  (edit[field] ?? "") !==
-                                  (row[field] ?? "")
+                                  (edit[field] ?? "") !== (row[field] ?? "")
                                     ? "input-dirty"
                                     : ""
                                 }
                               />
                             ))}
+                            
+                            {/* ✅ MARK FOR DELETION */}
+                            <label
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 4,
+                                marginLeft: 6,
+                                fontSize: "0.75em",
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={
+                                  edit.mark_delete !== undefined
+                                    ? Boolean(edit.mark_delete)
+                                    : Boolean(row.mark_delete)
+                                }
+                                onChange={(e) =>
+                                  updateEdit(
+                                    row.id,
+                                    "mark_delete",
+                                    e.target.checked ? 1 : 0
+                                  )
+                                }
+                              />
+                              {t("MARK_FOR_DELETION")}
+                            </label>
+
+                            {/* ✅ IS COMPILATION */}
+                            <label className="checkbox-field">
+                              <input
+                                type="checkbox"
+                                checked={
+                                  edit.is_compilation ??
+                                  Boolean(row.is_compilation)
+                                }
+                                onChange={(e) =>
+                                  updateEdit(
+                                    row.id,
+                                    "is_compilation",
+                                    e.target.checked ? 1 : 0
+                                  )
+                                }
+                              />
+                              {t("FIELD_IS_COMPILATION")}
+                            </label>
                           </div>
+
 
                           <div className="expanded-actions">
                             {isRowDirty(row) && (
