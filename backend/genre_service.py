@@ -21,6 +21,24 @@ from backend.taxonomy_core import (
 )
 
 from datetime import datetime, timezone
+from pydantic import BaseModel, Field
+from typing import List
+import sqlite3
+
+
+# ====================================================
+# API MODELS
+# ====================================================
+
+class GenreNormalizeRequest(BaseModel):
+    old_genre_ids: List[int] = Field(..., min_items=2)
+    canonical_name: str = Field(..., min_length=1)
+
+class GenreNormalizeResponse(BaseModel):
+    canonical_genre_id: int
+    files_affected: int
+    genres_deactivated: int
+
 
 # ====================================================
 # GENRE TAXONOMY SPEC
@@ -42,6 +60,18 @@ GENRE_SPEC = {
 
 def utcnow():
     return datetime.now(timezone.utc).isoformat()
+
+
+def ensure_active_column(conn):
+    """
+    Ensure soft-delete support exists for genres.
+    """
+    c = conn.cursor()
+    cols = [r[1] for r in c.execute("PRAGMA table_info(genres)").fetchall()]
+    if "active" not in cols:
+        c.execute("ALTER TABLE genres ADD COLUMN active INTEGER DEFAULT 1")
+        conn.commit()
+
 
 # ====================================================
 # Backwards-compatible aliases (used by discovery)
@@ -131,7 +161,7 @@ def link_file_to_genre(
     }
 
 # ====================================================
-# CLI / API facing wrappers
+# CLI / API facing wrappers (existing)
 # ====================================================
 
 def list_genres(conn, pattern="*"):
@@ -148,7 +178,7 @@ def normalize_genres(
     apply=False,
     clear_previous=False,
 ):
-    """Normalize many genres into one."""
+    """Normalize many genres into one (name-based, legacy)."""
     result = normalize_canonical(
         conn,
         spec=GENRE_SPEC,
@@ -160,7 +190,6 @@ def normalize_genres(
 
     stats = result["stats"]
 
-    # ⬇️ ADAPT taxonomy stats → genre stats
     adapted_stats = {
         "source_genres": stats["source_values"],
         "target_genre": stats["target_value"],
@@ -173,6 +202,116 @@ def normalize_genres(
     return {
         "key": "GENRES_NORMALIZED",
         "stats": adapted_stats,
+    }
+
+def normalize_genres_by_ids(
+    conn,
+    *,
+    old_genre_ids: List[int],
+    canonical_name: str,
+    apply: bool = False,
+    clear_previous: bool = False,
+):
+    """
+    Normalize multiple genres (by ID) into a single canonical genre.
+
+    This is the preferred, unambiguous path used by:
+    - API
+    - UI
+    - Advanced CLI workflows
+    """
+
+    if len(old_genre_ids) < 2:
+        raise ValueError("At least two genre IDs are required")
+
+    c = conn.cursor()
+
+    # -------------------------------------------------
+    # 1. Ensure / fetch canonical target genre
+    # -------------------------------------------------
+    target = ensure_canonical(
+        conn,
+        GENRE_SPEC,
+        canonical_name,
+        source="user",
+    )
+
+    target_genre_id = target["id"]
+
+    # -------------------------------------------------
+    # 2. Fetch affected files
+    # -------------------------------------------------
+    q = f"""
+        SELECT DISTINCT file_id
+        FROM file_genres
+        WHERE genre_id IN ({",".join("?" for _ in old_genre_ids)})
+    """
+    rows = c.execute(q, old_genre_ids).fetchall()
+    file_ids = [r["file_id"] for r in rows]
+
+    # -------------------------------------------------
+    # 3. Preview mode → no mutation
+    # -------------------------------------------------
+    if not apply:
+        return {
+            "key": "GENRES_NORMALIZE_PREVIEW",
+            "canonical_genre_id": target_genre_id,
+            "files_affected": len(file_ids),
+            "genres_deactivated": len(old_genre_ids),
+            "preview": True,
+        }
+
+    # -------------------------------------------------
+    # 4. Apply: link files to canonical genre
+    # -------------------------------------------------
+    for fid in file_ids:
+        c.execute(
+            """
+            INSERT OR IGNORE INTO file_genres (
+                file_id, genre_id, source, confidence, created_at
+            )
+            VALUES (?, ?, 'normalize', 1.0, ?)
+            """,
+            (fid, target_genre_id, utcnow()),
+        )
+
+    # -------------------------------------------------
+    # 5. Optionally remove previous links
+    # -------------------------------------------------
+    if clear_previous:
+        c.execute(
+            f"""
+            DELETE FROM file_genres
+            WHERE genre_id IN ({",".join("?" for _ in old_genre_ids)})
+              AND genre_id != ?
+            """,
+            (*old_genre_ids, target_genre_id),
+        )
+
+    # -------------------------------------------------
+    # 6. Soft-deactivate old genres (NOT delete)
+    # -------------------------------------------------
+    # 6. Soft-deactivate old genres (NOT delete)
+    ensure_active_column(conn)
+
+    c.execute(
+        f"""
+        UPDATE genres
+        SET active = 0
+        WHERE id IN ({",".join("?" for _ in old_genre_ids)})
+        AND id != ?
+        """,
+        (*old_genre_ids, target_genre_id),
+    )
+
+    conn.commit()
+
+    return {
+        "key": "GENRES_NORMALIZED",
+        "canonical_genre_id": target_genre_id,
+        "files_affected": len(file_ids),
+        "genres_deactivated": len(old_genre_ids) - 1,
+        "preview": False,
     }
 
 
@@ -195,3 +334,4 @@ def genres_for_selection(conn, file_ids):
     Adapter for API/UI selection logic.
     """
     return taxonomy_for_selection(conn, GENRE_SPEC, file_ids)
+

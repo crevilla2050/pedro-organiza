@@ -2,7 +2,7 @@
 """
 api.py
 
-Pedro Organiza — API v1.3
+Pedro Organiza — API v1.5
 
 Stable backend API for:
 - file browsing
@@ -66,6 +66,17 @@ from backend.startup_validation import validate_startup_plan
 from backend.startup_persistence import save_last_run_plan, load_last_run_plan
 from backend.db_state import get_active_db
 
+from fastapi import FastAPI, Depends, HTTPException
+
+from backend.db_state import get_active_db
+
+from backend.genre_service import (
+    normalize_genres_by_ids,
+    GenreNormalizeRequest,
+    GenreNormalizeResponse,
+)
+
+
 # ===================== ENV =====================
 
 load_dotenv()
@@ -124,16 +135,15 @@ def get_active_db_path() -> str:
 
 def get_db():
     path = get_active_db_path()
+    if not path:
+        raise RuntimeError("NO_ACTIVE_DB")
+
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
-    return conn
-
-@app.on_event("startup")
-def ensure_active_db():
-    from backend.db_state import get_active_db
-    if not get_active_db():
-        print("⚠️  No active database set.")
-        print("   Run: pedro db-set <path>")
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 # ===================== MODELS =====================
 
@@ -1190,14 +1200,32 @@ def update_genres(payload: dict):
 
     return {"status": "ok"}
 
+@app.post(
+    "/api/genres/normalize",
+    response_model=GenreNormalizeResponse,
+)
+def api_normalize_genres(
+    payload: GenreNormalizeRequest,
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    if len(payload.old_genre_ids) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="At least two genres are required for normalization",
+        )
 
-def save_active_db(path: str):
-    os.makedirs(os.path.dirname(ACTIVE_DB_PATH), exist_ok=True)
-    with open(ACTIVE_DB_PATH, "w", encoding="utf-8") as f:
-        json.dump({
-            "db_path": path,
-            "set_at": utcnow(),
-        }, f, indent=2)
+    try:
+        result = normalize_genres_by_ids(
+            conn,
+            old_genre_ids=payload.old_genre_ids,
+            canonical_name=payload.canonical_name,
+            apply=True,
+            clear_previous=True,
+        )
+        return result
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/startup/inspect-target")
@@ -1401,7 +1429,6 @@ def save_apply_report(report: ApplyRunReport) -> str:
         json.dump(report.dict(), f, indent=2)
 
     return path
-
 
 
 # ===================== END =====================

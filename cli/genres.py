@@ -10,6 +10,7 @@ from backend.genre_discovery import discover_genres
 from backend.i18n.messages import msg
 from backend.genre_service import normalize_genres
 from backend.reports.taxonomy_report import write_taxonomy_report
+from backend.genre_service import normalize_genres_by_ids
 
 
 def register_genres_commands(subparsers):
@@ -104,6 +105,13 @@ def register_genres_commands(subparsers):
         help=msg("GENRES_CLEANUP_APPLY_HELP")
     )
 
+    normalize_cmd.add_argument(
+        "--from-ids",
+        nargs="+",
+        type=int,
+        help="Source genre IDs (preferred, unambiguous)"
+    )
+
     return genres
 
 def handle_genres(args, conn):
@@ -120,21 +128,44 @@ def handle_genres(args, conn):
         print(f"{msg(result['key'])} {result['pattern']} ({result['count']})")
 
         for g in result["data"]:
-            print(f"- {g['name']} (files: {g['file_count']})")
+            print(f"- [{g['id']}] {g['name']} (files: {g['file_count']})")
+
 
     # ----------------------------
     # genres normalize
     # ----------------------------
     elif args.genres_command == "normalize":
-        result = normalize_genres(
-            conn,
-            source_genre_names=args.genres,
-            target_genre_name=args.to,
-            apply=args.apply_genres,
-            clear_previous=args.clear_previous,
-        )
+        if args.from_ids:
+            # ID-based normalization (future-proof, UI-compatible)
+            result = normalize_genres_by_ids(
+                conn,
+                old_genre_ids=args.from_ids,
+                canonical_name=args.to,
+                apply=args.apply_genres,
+                clear_previous=args.clear_previous,
+            )
+        else:
+            # Backwards-compatible name-based normalization
+            result = normalize_genres(
+                conn,
+                source_genre_names=args.genres,
+                target_genre_name=args.to,
+                apply=args.apply_genres,
+                clear_previous=args.clear_previous,
+            )
 
-        stats = result["stats"]
+        if "stats" in result:
+            stats = result["stats"]
+        else:
+            stats = {
+                "source_genres": args.from_ids,
+                "target_genre": args.to,
+                "files_affected": result["files_affected"],
+                "links_added": None,
+                "links_removed": None,
+                "preview": result.get("preview", False),
+            }
+
 
         report_path, _ = write_taxonomy_report(
             taxonomy="genres",

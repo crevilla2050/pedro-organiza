@@ -486,6 +486,17 @@ def ensure_mark_delete_column(c):
             ADD COLUMN mark_delete INTEGER DEFAULT 0
         """)
 
+def ensure_genres_columns(c):
+        """
+        Ensure optional / forward-compatible columns on `genres`.
+        """
+        ensure_column(
+            c,
+            "genres",
+            "active",
+            "active INTEGER DEFAULT 1"
+        )
+
 def normalize_file_row(c, file_id):
     """Compute and persist normalized textual fields for a file.
 
@@ -550,6 +561,14 @@ def create_db(db_path):
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
 
+    # --- Ensure all tables have the required columns ---
+    
+    ensure_metadata_columns(c)
+    ensure_normalized_columns(c)
+    ensure_genres_columns(c)
+    ensure_alias_views(c)
+    ensure_mark_delete_column(c)
+
     c.executescript("""
     PRAGMA foreign_keys = ON;
 
@@ -608,7 +627,8 @@ def create_db(db_path):
         name TEXT NOT NULL UNIQUE,
         normalized_name TEXT NOT NULL UNIQUE,
         source TEXT DEFAULT 'user',
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        active INTEGER DEFAULT 1
     );
 
     CREATE TABLE IF NOT EXISTS genre_mappings (
@@ -667,6 +687,8 @@ def create_db(db_path):
     CREATE INDEX IF NOT EXISTS idx_file_genres_file ON file_genres(file_id);
     CREATE INDEX IF NOT EXISTS idx_file_genres_genre ON file_genres(genre_id);
     CREATE INDEX IF NOT EXISTS idx_genre_mappings_norm ON genre_mappings(normalized_token);
+    CREATE INDEX IF NOT EXISTS idx_genres_active ON genres(active);
+
     """)
 
     # --- Ensure single environment row exists ---
@@ -681,13 +703,6 @@ def create_db(db_path):
             (id, source_root, library_root, schema_version, created_at, last_update)
             VALUES (1, NULL, NULL, 1, ?, ?)
         """, (now, now))
-
-    # --- Ensure all tables have the required columns ---
-    
-    ensure_metadata_columns(c)
-    ensure_normalized_columns(c)
-    ensure_alias_views(c)
-    ensure_mark_delete_column(c)
 
     conn.commit()
     return conn
