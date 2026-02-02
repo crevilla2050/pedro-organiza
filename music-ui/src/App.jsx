@@ -8,7 +8,8 @@ import ApplyStep from "./startup/steps/ApplyStep";
 import DoneStep from "./startup/steps/DoneStep";
 import FileTable from "./components/FileTable";
 import GenresPanel from "./components/GenresPanel";
-import FilterBar from "./components/FilterBar";
+
+
 
 import { t } from "./i18n";
 import pedroLogo from "./assets/logo.png";
@@ -72,6 +73,21 @@ export default function App() {
       };
     });
   }, []);
+
+  /* ===================== PENDING OPERATIONS ===================== */
+  
+  const [dirtyFileIds, setDirtyFileIds] = useState([]);
+  const [dirtyIds, setDirtyIds] = useState([]);
+  const [markedForDeletionIds, setMarkedForDeletionIds] = useState([]);
+
+  const handleDirtyChange = (ids) => {
+    setDirtyIds(ids);
+  };
+
+  const handleMarkedForDeletionChange = (ids) => {
+    setMarkedForDeletionIds(ids);
+  };
+
 
   /* ===================== FETCH FILES ===================== */
 
@@ -164,6 +180,7 @@ export default function App() {
           flexDirection: panelSide === "left" ? "row" : "row-reverse",
         }}
       >
+
         {/* SIDE PANEL */}
         <aside
           className={`side-panel ${panelOpen ? "open" : "collapsed"}`}
@@ -188,25 +205,34 @@ export default function App() {
 
         {/* MAIN CONTENT */}
         <main className="main-content" style={{ flex: 1, minWidth: 0 }}>
-          <div className="file-table-container">
-            <FilterBar filters={filters} setFilters={setFilters} />
+          <FileTable
+            files={files}
+            loading={loading}
+            error={error}
 
-            <FileTable
-              files={files}
-              loading={loading}
-              error={error}
-              onClearFilters={clearFilters}
-              onGoToApply={() => setPhase("apply")}
-              onSelectionChange={setSelection}
-              onUpdateFile={(id, patch) => {
-                setFiles(prev =>
-                  prev.map(row =>
-                    row.id === id ? { ...row, ...patch } : row
-                  )
-                );
-              }}
-            />
-          </div>
+            /* filters */
+            filters={filters}
+            setFilters={setFilters}
+            onClearFilters={clearFilters}
+
+            /* pending ops */
+            dirtyIds={dirtyIds}
+            markedForDeletionIds={markedForDeletionIds}
+            onDirtyChange={handleDirtyChange}
+            onMarkedForDeletionChange={handleMarkedForDeletionChange}
+
+            /* navigation */
+            onGoToApply={() => setPhase("apply")}
+            onSelectionChange={setSelection}
+
+            onUpdateFile={(id, patch) => {
+              setFiles((prev) =>
+                prev.map((row) =>
+                  row.id === id ? { ...row, ...patch } : row
+                )
+              );
+            }}
+          />
         </main>
       </div>
     </PlaybackProvider>

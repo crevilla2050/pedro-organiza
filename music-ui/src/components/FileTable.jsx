@@ -2,6 +2,8 @@ import { useState, Fragment, useRef, useEffect } from "react";
 import { usePlayback } from "../context/PlaybackContext";
 import { t } from "../i18n";
 
+import ApplyPendingBar from "./ApplyPendingBar";
+import FilterBar from "./FilterBar";
 import BulkSelectionToolbar from "./BulkSelectionToolbar";
 
 const API_BASE = "http://127.0.0.1:8000";
@@ -10,13 +12,24 @@ export default function FileTable({
   files,
   loading,
   error,
-  onApplySearch,
-  onAlpha,
+
+  /* filters */
+  filters,
+  setFilters,
   onClearFilters,
+
+  /* pending ops */
+  dirtyIds,
+  markedForDeletionIds,
+  onDirtyChange,
+  onMarkedForDeletionChange,
+
+  /* navigation */
   onGoToApply,
   onSelectionChange,
   onUpdateFile,
 }) {
+
 
   /* ===================== LOCAL FILTER STATE ===================== */
 
@@ -104,6 +117,16 @@ export default function FileTable({
       (key) => (edit[key] ?? "") !== (row[key] ?? "")
     );
   };
+
+  /* ===================== DIRTY PROPAGATION ===================== */
+
+  useEffect(() => {
+    if (!onDirtyChange) return;
+
+    const dirtyIds = Object.keys(edits).map(Number);
+    onDirtyChange(dirtyIds);
+  }, [edits, onDirtyChange]);
+
 
   /* ===================== PATCH ===================== */
 
@@ -217,6 +240,16 @@ export default function FileTable({
     <div className="file-table-root">
       <div className="pedro-fixed-header">
         <div className="pedro-sticky-bulk">
+          <FilterBar
+            filters={filters}
+            setFilters={setFilters}
+          />
+
+          <ApplyPendingBar
+            dirtyIds={dirtyIds}
+            markedForDeletionIds={markedForDeletionIds}
+            onApply={onGoToApply}
+          />
           <BulkSelectionToolbar
             selectedCount={selectedCount}
             onApplyBulkEdit={applyBulkEdits}

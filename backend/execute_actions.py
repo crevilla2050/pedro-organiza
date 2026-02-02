@@ -253,20 +253,35 @@ def execute_actions(
 
             # ---------------- DELETE (SOFT) ----------------
             elif action == "delete":
-                dst = trash_root / src.name
-                ensure_parent(dst)
+                delete_mode = row.get("delete_mode", "quarantine")
 
-                log("EXEC_TRASH", src=src, dst=dst)
-                if not dry_run:
-                    shutil.move(src, dst)
+                if delete_mode == "permanent":
+                    log("EXEC_DELETE_PERMANENT", src=src)
+                    if not dry_run:
+                        src.unlink()
 
-                c.execute("""
-                    UPDATE files
-                    SET original_path=?,
-                        lifecycle_state='applied',
-                        last_update=?
-                    WHERE id=?
-                """, (str(dst), utcnow(), fid))
+                    c.execute("""
+                        UPDATE files
+                        SET lifecycle_state='applied',
+                            last_update=?
+                        WHERE id=?
+                    """, (utcnow(), fid))
+
+                else:
+                    dst = trash_root / src.name
+                    ensure_parent(dst)
+
+                    log("EXEC_TRASH", src=src, dst=dst)
+                    if not dry_run:
+                        shutil.move(src, dst)
+
+                    c.execute("""
+                        UPDATE files
+                        SET original_path=?,
+                            lifecycle_state='applied',
+                            last_update=?
+                        WHERE id=?
+                    """, (str(dst), utcnow(), fid))
 
                 summary["deleted"] += 1
 

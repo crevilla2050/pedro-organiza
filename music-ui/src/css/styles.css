@@ -1252,3 +1252,37 @@ tr.expanded td {
   display: inline-block;
   background: transparent;
 }
+
+.apply-pending-bar {
+  position: sticky;
+  top: 0;
+  z-index: 1200;
+  background: #fff3cd;
+  border-bottom: 1px solid #e0c97f;
+  padding: 6px 12px;
+}
+
+.apply-pending-inner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.pending-summary {
+  display: flex;
+  gap: 12px;
+  font-size: 0.9em;
+}
+
+.confirm-delete {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85em;
+  color: #842029;
+}
+
+.pending-actions {
+  margin-left: auto;
+}

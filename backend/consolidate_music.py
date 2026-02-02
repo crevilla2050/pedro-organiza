@@ -358,6 +358,10 @@ def ensure_metadata_columns(c):
     ensure_column(c, "files", "comment", "comment TEXT")
     ensure_column(c, "files", "lyrics", "lyrics TEXT")
     ensure_column(c, "files", "publisher", "publisher TEXT")
+    ensure_column(c, "files", "quarantined_path","quarantined_path TEXT")
+    ensure_column(c, "files", "quarantined_at","quarantined_at TEXT")
+    ensure_column(c, "files", "delete_mode","delete_mode TEXT DEFAULT 'quarantine'")
+
 
 def ensure_alias_views(c):
     # --- Signal A: SHA-256 ---
@@ -592,7 +596,10 @@ def create_db(db_path):
         first_seen TEXT,
         last_update TEXT,
         notes TEXT,
-        mark_delete INTEGER DEFAULT 0
+        mark_delete INTEGER DEFAULT 0,
+        quarantined_path TEXT,
+        quarantined_at TEXT,
+        delete_mode TEXT DEFAULT 'quarantine'
     );
 
     CREATE TABLE IF NOT EXISTS album_art (

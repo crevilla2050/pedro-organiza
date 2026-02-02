@@ -440,4 +440,8 @@ export default {
   NORMALIZE_GENRES: "Normalize genres",
   CANONICAL_GENRE_NAME: "Canonical genre name",
   FIELD_IS_COMPILATION: "Part of compilation",
+  PENDING_CHANGES: "pending changes",
+  FILES_MARKED_FOR_DELETION: "files marked for deletion",
+  CONFIRM_DELETION_WARNING: "I understand that this operation is irreversible",
+  APPLY_PENDING_OPERATIONS: "Apply pending operations",
 };

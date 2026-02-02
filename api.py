@@ -27,6 +27,8 @@ from typing import List, Optional, Dict, Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import APIRouter
+from typing import List, Literal
 from fastapi import Request
 from fastapi.responses import StreamingResponse
 import mimetypes
@@ -257,6 +259,10 @@ class ApplyRunReport(BaseModel):
     summary: ApplyRunSummary
     files: List[ApplyFileResult]
 
+
+class PlanActionsRequest(BaseModel):
+    file_ids: List[int]
+    delete_mode: Literal["quarantine", "permanent"] = "quarantine"
 
 # ===================== CONSTANTS =====================
 
@@ -1413,6 +1419,34 @@ def build_apply_plan(candidates: List[sqlite3.Row]) -> List[ApplyFileResult]:
 
     return plan
 
+@app.post("/actions/plan")
+def plan_actions(req: PlanActionsRequest):
+    if not req.file_ids:
+        raise HTTPException(status_code=400, detail="No file ids")
+
+    conn = get_db()  # your existing generator
+    cur = conn.cursor()
+
+    # Plan deletes
+    cur.execute(
+        f"""
+        UPDATE files
+        SET
+            action = 'delete',
+            delete_mode = ?,
+            lifecycle_state = 'pending',
+            last_update = CURRENT_TIMESTAMP
+        WHERE id IN ({",".join("?" * len(req.file_ids))})
+        """,
+        [req.delete_mode, *req.file_ids],
+    )
+
+    conn.commit()
+
+    return {
+        "planned": len(req.file_ids),
+        "delete_mode": req.delete_mode,
+    }
 
 def apply_deletions(conn, plan: List[ApplyFileResult]):
     cur = conn.cursor()
