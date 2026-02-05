@@ -78,6 +78,12 @@ from backend.genre_service import (
     GenreNormalizeResponse,
 )
 
+from backend.config_service import (
+    load_config,
+    save_config,
+    ensure_quarantine_exists,
+)
+
 
 # ===================== ENV =====================
 
@@ -146,6 +152,15 @@ def get_db():
         yield conn
     finally:
         conn.close()
+
+def deep_merge(original, patch):
+    for k, v in patch.items():
+        if isinstance(v, dict) and isinstance(original.get(k), dict):
+            deep_merge(original[k], v)
+        else:
+            original[k] = v
+    return original
+
 
 # ===================== MODELS =====================
 
@@ -280,7 +295,26 @@ EDITABLE_FIELDS = {
     "mark_delete",
 }
 
-# ===================== STARTUP: VERIFY DB =====================
+# ===================== STARTUP: VERIFY  CONFIG AND DB =====================
+@app.get("/api/config")
+def get_config():
+    return load_config()
+
+
+@app.patch("/api/config")
+def patch_config(patch: dict):
+    cfg = load_config()
+
+    updated = deep_merge(cfg, patch)
+
+    save_config(updated)
+
+    # important — auto-create quarantine if changed
+    if "paths" in patch and "quarantine_path" in patch["paths"]:
+        ensure_quarantine_exists()
+
+    return updated
+
 
 @app.on_event("startup")
 def verify_db():

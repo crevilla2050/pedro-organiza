@@ -1,18 +1,6 @@
 #!/usr/bin/env python3
 """
-pedro_cli.py
-
 Pedro Organiza — CLI Wrapper with i18n support
-
-Responsibilities:
-- Execute backend scripts
-- Capture stdout line by line
-- Translate i18n message objects
-- Render human-readable output
-- Preserve raw output when needed
-- Manage Pedro-level config (language only)
-
-This wrapper NEVER changes backend behavior.
 """
 
 import argparse
@@ -21,13 +9,16 @@ import subprocess
 import sys
 from pathlib import Path
 
+from backend.config_service import load_config, save_config
+
 # ---------------- PATHS ----------------
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT_DIR / "backend" / "config.json"
 I18N_DIR = ROOT_DIR / "music-ui" / "src" / "i18n"
 
-# ---------------- CONFIG ----------------
+
+# ---------------- DEFAULT CONFIG ----------------
 
 def default_config():
     return {
@@ -36,25 +27,15 @@ def default_config():
             "normalization": "v1.0",
             "signals": "v1.0",
             "grouping": "v1.0",
+            "config_version": "1.0",
         },
         "ui": {
             "translate": True
+        },
+        "paths": {
+            "quarantine_path": "~/PedroQuarantine"
         }
     }
-
-
-def load_config():
-    if not CONFIG_PATH.exists():
-        return None
-    try:
-        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    except Exception as e:
-        raise SystemExit(f"[ERROR] Invalid config.json: {e}")
-
-
-def save_config(cfg):
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
 
 # ---------------- I18N ----------------
@@ -143,26 +124,38 @@ def main():
     parser.add_argument("--raw", action="store_true", help="Do not translate output")
 
     sub = parser.add_subparsers(dest="command")
-    # test
+
+    # ---------------- TEST ----------------
     p_test = sub.add_parser("test", help="Run Pedro test corpus")
     p_test.add_argument("--verbose", action="store_true")
-    p_test.add_argument("--only", help="Run only one test phase")
+    p_test.add_argument("--only")
     p_test.add_argument("--fail-fast", action="store_true")
 
-
-    # init
+    # ---------------- INIT ----------------
     p_init = sub.add_parser("init", help="Initialize Pedro config")
-    p_init.add_argument("--lang", help="Set default language")
-    p_init.add_argument("--force", action="store_true", help="Overwrite existing config")
+    p_init.add_argument("--lang")
+    p_init.add_argument("--force", action="store_true")
 
-    # status
+    # ---------------- STATUS ----------------
     sub.add_parser("status", help="Show Pedro status")
 
-    # run
+    # ---------------- RUN ----------------
     p_run = sub.add_parser("run", help="Run a backend script")
-    p_run.add_argument("script", help="Path to backend script")
+    p_run.add_argument("script")
     p_run.add_argument("script_args", nargs=argparse.REMAINDER)
-    
+
+    # =====================================================
+    # ⭐ CONFIG COMMAND TREE (NEW — Pedro 0.7)
+    # =====================================================
+
+    p_config = sub.add_parser("config", help="Manage Pedro configuration")
+    config_sub = p_config.add_subparsers(dest="config_cmd")
+
+    config_sub.add_parser("show", help="Show current config")
+
+    p_set = config_sub.add_parser("set", help="Set config value")
+    p_set.add_argument("key", help="Dot path (example: paths.quarantine_path)")
+    p_set.add_argument("value")
 
     args = parser.parse_args()
 
@@ -170,6 +163,7 @@ def main():
     config = load_config()
 
     # ---------------- INIT ----------------
+
     if args.command == "init":
         if CONFIG_PATH.exists() and not args.force:
             print("Config already exists. Use --force to overwrite.")
@@ -180,22 +174,25 @@ def main():
             cfg["language"] = args.lang
 
         save_config(cfg)
+
         print(f"Config initialized at {CONFIG_PATH}")
         sys.exit(0)
 
-    # ---------------- LANGUAGE RESOLUTION ----------------
+    # ---------------- LANGUAGE ----------------
+
     lang, warning = resolve_language(args.lang, config, langs)
     if warning:
         print(f"[WARN] {warning}")
 
-    translations = {}
     try:
         translations = load_translations(lang)
     except FileNotFoundError:
         print("[WARN] Failed to load translations, using raw output.")
+        translations = {}
         args.raw = True
 
     # ---------------- STATUS ----------------
+
     if args.command == "status":
         print("Pedro Organiza")
         print("--------------")
@@ -204,6 +201,7 @@ def main():
         sys.exit(0)
 
     # ---------------- TEST ----------------
+
     if args.command == "test":
         from cli.test_runner import run_tests
 
@@ -214,16 +212,46 @@ def main():
         )
         sys.exit(exit_code)
 
+    # ---------------- CONFIG ----------------
+
+    if args.command == "config":
+
+        cfg = load_config()
+
+        if args.config_cmd == "show":
+            print(json.dumps(cfg, indent=2, ensure_ascii=False))
+            sys.exit(0)
+
+        if args.config_cmd == "set":
+
+            keys = args.key.split(".")
+            ref = cfg
+
+            for k in keys[:-1]:
+                ref = ref.setdefault(k, {})
+
+            value = args.value
+
+            # small type coercion
+            if value.lower() in ("true", "false"):
+                value = value.lower() == "true"
+
+            ref[keys[-1]] = value
+
+            save_config(cfg)
+
+            print(f"Updated {args.key}")
+            sys.exit(0)
+
+        p_config.print_help()
+        sys.exit(0)
 
     # ---------------- RUN ----------------
-    
-    if args.command == "run":
-        script = args.script
-        script_args = args.script_args
 
+    if args.command == "run":
         exit_code = run_script(
-            script,
-            script_args,
+            args.script,
+            args.script_args,
             translations,
             raw=args.raw
         )

@@ -31,6 +31,9 @@ import os
 import json
 from dotenv import load_dotenv
 
+from backend.config_service import ensure_quarantine_exists
+
+
 # Optional album art normalization
 try:
     from backend.resize_images import normalize_image
@@ -150,7 +153,7 @@ def execute_actions(
     limit=None,
     normalize_art=False,
 ):
-    trash_root = Path(trash_root).resolve()
+    trash_root = ensure_quarantine_exists()
     if archive_root:
         archive_root = Path(archive_root).resolve()
 

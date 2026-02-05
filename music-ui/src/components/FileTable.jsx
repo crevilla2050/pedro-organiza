@@ -244,7 +244,6 @@ export default function FileTable({
             filters={filters}
             setFilters={setFilters}
           />
-
           <ApplyPendingBar
             dirtyIds={dirtyIds}
             markedForDeletionIds={markedForDeletionIds}
@@ -415,7 +414,7 @@ export default function FileTable({
                               />
                             ))}
                             
-                            {/* ✅ MARK FOR DELETION */}
+                            {/* MARK FOR DELETION */}
                             <label
                               style={{
                                 display: "inline-flex",
@@ -443,7 +442,7 @@ export default function FileTable({
                               {t("MARK_FOR_DELETION")}
                             </label>
 
-                            {/* ✅ IS COMPILATION */}
+                            {/* IS COMPILATION */}
                             <label className="checkbox-field">
                               <input
                                 type="checkbox"

@@ -56,38 +56,45 @@ def main():
         "scan",
         help="Scan music library and update database",
         description="""
-Scan a music library and populate or update the Pedro database.
+            Scan a music library and populate or update the Pedro database.
 
-This command performs ANALYSIS ONLY.
-It does NOT move, copy, or delete files.
+            This command performs ANALYSIS ONLY.
+            It does NOT move, copy, or delete files.
 
-db modes:
-  full            Full scan (default)
-  schema-only     Ensure schema only
-  db-update-only  Update metadata without overwriting
-  normalize-only  Normalize textual fields only
-"""
+            db modes:
+            full            Full scan (default)
+            schema-only     Ensure schema only
+            db-update-only  Update metadata without overwriting
+            normalize-only  Normalize textual fields only
+            """
     )
 
-    scan.add_argument("--src", help="Source music directory")
-    scan.add_argument("--lib", help="Canonical library root")
-    scan.add_argument(
+    # ---------------- ANALYZE (alias for scan) ----------------
+    analyze = subparsers.add_parser(
+        "analyze",
+        help=argparse.SUPPRESS,
+        description=scan.description
+    )
+
+    analyze.add_argument("--src", help="Source music directory")
+    analyze.add_argument("--lib", help="Canonical library root")
+    analyze.add_argument(
         "--db-mode",
         choices=["full", "schema-only", "db-update-only", "normalize-only"],
         default="full",
         help="Database update mode"
     )
-    scan.add_argument(
+    analyze.add_argument(
         "--with-fingerprint",
         action="store_true",
         help="Enable audio fingerprinting"
     )
-    scan.add_argument(
+    analyze.add_argument(
         "--search-covers",
         action="store_true",
         help="Search for album art"
     )
-    scan.add_argument(
+    analyze.add_argument(
         "--no-overwrite",
         action="store_true",
         help="Do not overwrite existing metadata"
@@ -200,7 +207,7 @@ db modes:
         if args.command == "genres":
             handle_genres(args, conn)
 
-        elif args.command == "scan":
+        elif args.command in ("scan", "analyze"):
             from backend.consolidate_music import analyze_files
 
             analyze_files(
