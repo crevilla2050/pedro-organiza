@@ -54,25 +54,15 @@ def main():
     # ---------------- SCAN ----------------
     scan = subparsers.add_parser(
         "scan",
-        help="Scan music library and update database",
-        description="""
-            Scan a music library and populate or update the Pedro database.
-
-            This command performs ANALYSIS ONLY.
-            It does NOT move, copy, or delete files.
-
-            db modes:
-            full            Full scan (default)
-            schema-only     Ensure schema only
-            db-update-only  Update metadata without overwriting
-            normalize-only  Normalize textual fields only
-            """
+        help = argparse.SUPPRESS,  
+        description=argparse.SUPPRESS
     )
+    
 
     # ---------------- ANALYZE (alias for scan) ----------------
     analyze = subparsers.add_parser(
         "analyze",
-        help=argparse.SUPPRESS,
+        help="Analyze music library and update database",
         description=scan.description
     )
 
