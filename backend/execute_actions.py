@@ -148,14 +148,18 @@ def execute_actions(
     db_path,
     *,
     archive_root=None,
-    trash_root="to_trash",
+    trash_root=None,
     dry_run=False,
     limit=None,
     normalize_art=False,
 ):
-    trash_root = ensure_quarantine_exists()
-    if archive_root:
-        archive_root = Path(archive_root).resolve()
+    # Allow temporary quarantine override per run.
+    # Config remains authoritative unless explicitly overridden.
+    if trash_root:
+        trash_root = Path(trash_root).expanduser().resolve()
+        trash_root.mkdir(parents=True, exist_ok=True)
+    else:
+        trash_root = ensure_quarantine_exists()
 
     conn = connect_db(db_path)
     c = conn.cursor()
@@ -167,14 +171,24 @@ def execute_actions(
     # are already 'applied' or 'locked' are skipped.
     query = """
         SELECT
-            id,
-            original_path,
-            recommended_path,
-            action,
-            lifecycle_state
-        FROM files
-        WHERE action IN ('move','archive','delete','skip')
-          AND lifecycle_state NOT IN ('applied','locked')
+            a.id              AS action_id,
+            a.action          AS action,
+            a.src_path        AS src_path,
+            a.dst_path        AS dst_path,
+            a.status          AS status,
+
+            f.id              AS file_id,
+            f.original_path   AS original_path,
+            f.recommended_path,
+            f.lifecycle_state,
+            f.delete_mode
+
+        FROM actions a
+        JOIN files f ON f.id = a.file_id
+
+        WHERE a.status = 'pending'
+        AND f.lifecycle_state NOT IN ('applied','locked','error')
+
     """
 
     if limit:
@@ -193,9 +207,10 @@ def execute_actions(
     }
 
     for row in rows:
-        fid = row["id"]
+        action_id = row["action_id"]
+        file_id = row["file_id"]
         action = row["action"]
-        src = Path(row["original_path"]) if row["original_path"] else None
+        src = Path(row["src_path"]) if row["src_path"] else None
 
         try:
             if not src or not src.exists():
@@ -207,7 +222,7 @@ def execute_actions(
                 if not row["recommended_path"]:
                     raise RuntimeError("MISSING_RECOMMENDED_PATH")
 
-                dst = Path(row["recommended_path"])
+                dst = Path(row["dst_path"] or row["recommended_path"])
                 ensure_parent(dst)
 
                 log("EXEC_MOVE", src=src, dst=dst)
@@ -219,13 +234,22 @@ def execute_actions(
                     normalize_album_art_in_dir(dst.parent)
 
                 # Mark as applied and update path + timestamp
-                c.execute("""
-                    UPDATE files
-                    SET original_path=?,
-                        lifecycle_state='applied',
-                        last_update=?
-                    WHERE id=?
-                """, (str(dst), utcnow(), fid))
+                if not dry_run:
+                    c.execute("""
+                        UPDATE files
+                        SET original_path=?,
+                            lifecycle_state='applied',
+                            last_update=?
+                        WHERE id=?
+                    """, (str(dst), utcnow(), file_id))
+                
+                if not dry_run:
+                    c.execute("""
+                        UPDATE actions
+                        SET status='applied',
+                            applied_at=?
+                        WHERE id=?
+                    """, (utcnow(), action_id))
 
                 summary["moved"] += 1
 
@@ -243,32 +267,48 @@ def execute_actions(
 
                 if normalize_art:
                     normalize_album_art_in_dir(dst.parent)
-
-                c.execute("""
-                    UPDATE files
-                    SET original_path=?,
-                        lifecycle_state='applied',
-                        last_update=?
-                    WHERE id=?
-                """, (str(dst), utcnow(), fid))
+                if not dry_run:
+                    c.execute("""
+                        UPDATE files
+                        SET original_path=?,
+                            lifecycle_state='applied',
+                            last_update=?
+                        WHERE id=?
+                    """, (str(dst), utcnow(), file_id))
+                if not dry_run:
+                    c.execute("""
+                        UPDATE actions
+                        SET status='applied',
+                            applied_at=?
+                        WHERE id=?
+                    """, (utcnow(), action_id))
 
                 summary["archived"] += 1
 
             # ---------------- DELETE (SOFT) ----------------
             elif action == "delete":
-                delete_mode = row.get("delete_mode", "quarantine")
+                delete_mode = row["delete_mode"] or "quarantine"
+                if delete_mode not in ("quarantine", "permanent"):
+                    raise RuntimeError(f"INVALID_DELETE_MODE: {delete_mode}")
 
                 if delete_mode == "permanent":
                     log("EXEC_DELETE_PERMANENT", src=src)
                     if not dry_run:
                         src.unlink()
-
-                    c.execute("""
-                        UPDATE files
-                        SET lifecycle_state='applied',
-                            last_update=?
-                        WHERE id=?
-                    """, (utcnow(), fid))
+                    if not dry_run:
+                        c.execute("""
+                            UPDATE files
+                            SET lifecycle_state='applied',
+                                last_update=?
+                            WHERE id=?
+                        """, (utcnow(), file_id))
+                    if not dry_run:
+                        c.execute("""
+                            UPDATE actions
+                            SET status='applied',
+                                applied_at=?
+                            WHERE id=?
+                        """, (utcnow(), action_id))
 
                 else:
                     dst = trash_root / src.name
@@ -277,14 +317,21 @@ def execute_actions(
                     log("EXEC_TRASH", src=src, dst=dst)
                     if not dry_run:
                         shutil.move(src, dst)
-
-                    c.execute("""
-                        UPDATE files
-                        SET original_path=?,
-                            lifecycle_state='applied',
-                            last_update=?
-                        WHERE id=?
-                    """, (str(dst), utcnow(), fid))
+                    if not dry_run:
+                        c.execute("""
+                            UPDATE files
+                            SET original_path=?,
+                                lifecycle_state='applied',
+                                last_update=?
+                            WHERE id=?
+                        """, (str(dst), utcnow(), file_id))
+                    if not dry_run:
+                        c.execute("""
+                            UPDATE actions
+                            SET status='applied',
+                                applied_at=?
+                            WHERE id=?
+                        """, (utcnow(), action_id))
 
                 summary["deleted"] += 1
 
@@ -292,38 +339,61 @@ def execute_actions(
             elif action == "skip":
                 # Lock the file so it won't be proposed for actions again
                 log("EXEC_SKIP", src=src)
-                c.execute("""
-                    UPDATE files
-                    SET lifecycle_state='locked',
-                        last_update=?
-                    WHERE id=?
-                """, (utcnow(), fid))
+                if not dry_run:
+                    c.execute("""
+                        UPDATE files
+                        SET lifecycle_state='locked',
+                            last_update=?
+                        WHERE id=?
+                    """, (utcnow(), file_id))
+                    
+                if not dry_run:
+                    c.execute("""
+                        UPDATE actions
+                        SET status='applied',
+                            applied_at=?
+                        WHERE id=?
+                    """, (utcnow(), action_id))
                 summary["skipped"] += 1
 
             # Persist the per-row changes immediately so progress is
             # visible to other processes.
-            conn.commit()
+            if not dry_run:
+                conn.commit()
 
         except Exception as e:
             # On any failure, record the error on the file row and continue
             err = str(e)
-            log("EXEC_ERROR", id=fid, error=err)
-            c.execute("""
-                UPDATE files
-                SET lifecycle_state='error',
-                    last_update=?,
-                    notes=COALESCE(notes,'') || ?
-                WHERE id=?
-            """, (utcnow(), f" | exec_error:{err}", fid))
-            conn.commit()
+            log("EXEC_ERROR", id=file_id, error=err)
+            if not dry_run:
+                c.execute("""
+                    UPDATE files
+                    SET lifecycle_state='error',
+                        last_update=?,
+                        notes=COALESCE(notes,'') || ?
+                    WHERE id=?
+                """, (utcnow(), f" | exec_error:{err}", file_id))
+            if not dry_run:
+                c.execute("""
+                    UPDATE actions
+                    SET status='error',
+                        error=?
+                    WHERE id=?
+                """, (err, action_id))
+
+            if not dry_run:
+                conn.commit()
+            
             summary["errors"] += 1
 
     conn.close()
 
     log("EXEC_FINISHED")
     for k, v in summary.items():
-        log("EXEC_SUMMARY_LINE", key=k, value=v)
-
+        log("EXEC_SUMMARY_LINE", metric=k, value=v)
+    
+    log("EXEC_SUMMARY_END")
+    return summary
 
 # ================= CLI =================
 
@@ -350,7 +420,6 @@ def main():
         limit=args.limit,
         normalize_art=args.normalize_art,
     )
-
 
 if __name__ == "__main__":
     main()

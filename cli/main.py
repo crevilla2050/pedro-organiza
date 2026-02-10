@@ -93,6 +93,54 @@ def main():
     # ---------------- GENRES ----------------
     register_genres_commands(subparsers)
 
+    # ---------------- APPLY ----------------
+    apply_parser = subparsers.add_parser(
+        "apply",
+        help="Apply pending filesystem actions"
+    )
+
+    apply_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Simulate execution without modifying files"
+    )
+    
+    apply_parser.add_argument(
+        "--preview", 
+        action="store_true",
+        help="Simulate execution without modifying files"
+    )
+
+    apply_parser.add_argument(
+        "--limit",
+        type=int,
+        help="Limit number of actions"
+    )
+
+    apply_parser.add_argument(
+        "--delete-permanent",
+        action="store_true",
+        help="Permanently delete files instead of quarantining"
+    )
+
+    apply_parser.add_argument(
+        "--yes-i-know-what-im-doing",
+        action="store_true",
+        dest="confirm_permanent",
+        help="Required to enable permanent deletion"
+    )
+
+    apply_parser.add_argument(
+        "--trash-root",
+        help="Override quarantine directory for this run"
+    )
+
+    apply_parser.add_argument(
+        "--normalize-art",
+        action="store_true",
+        help="Normalize album art after move/archive"
+    )
+
     # ---------------- Parse args ----------------
     args = parser.parse_args()
 
@@ -210,6 +258,36 @@ def main():
                 db_mode=args.db_mode,
                 no_overwrite=args.no_overwrite,
             )
+        elif args.command == "apply":
+
+            # ---------- PREVIEW (read-only, no locks, no engine) ----------
+            if args.preview:
+                from backend.preview_service import preview_apply
+
+                result = preview_apply(limit=args.limit)
+                print(json.dumps(result, indent=2))
+                return
+
+            # ---------- APPLY / DRY-RUN ----------
+            from backend.apply_service import apply_actions
+
+            try:
+                summary = apply_actions(
+                    dry_run=args.dry_run,
+                    permanent_delete=args.delete_permanent,
+                    confirm_permanent=args.confirm_permanent,
+                    limit=args.limit,
+                    normalize_art=args.normalize_art,
+                    trash_root=args.trash_root,
+                )
+
+                print(json.dumps(summary, indent=2))
+
+            except RuntimeError as e:
+                print(str(e))
+                return
+            
+            print(json.dumps(summary, indent=2))
     finally:
         conn.close()
 

@@ -1,12 +1,49 @@
 from platformdirs import user_config_dir
+from pathlib import Path
 import os
 
-APP_NAME = "pedro-organiza"
-
+APP_NAME = "pedro"
+OLD_APP_NAME = "pedro-organiza"
 BASE_CONFIG_DIR = user_config_dir(APP_NAME)
 
-def ensure_dir(path: str):
-    os.makedirs(path, exist_ok=True)
+def _migrate_runtime_dir():
+    """
+    One-time migration from ~/.config/pedro-organiza → ~/.config/pedro
+
+    Safe because:
+    - rename is atomic
+    - occurs before paths are exported
+    - avoids dual runtime directories forever
+    """
+
+    new_dir = Path(user_config_dir(APP_NAME))
+    old_dir = Path(user_config_dir(OLD_APP_NAME))
+
+    # Case 1 — new already exists → nothing to do
+    if new_dir.exists():
+        return new_dir
+
+    # Case 2 — old exists → migrate
+    if old_dir.exists():
+        try:
+            old_dir.rename(new_dir)
+        except Exception as e:
+            raise RuntimeError(
+                f"FAILED_RUNTIME_MIGRATION: could not rename "
+                f"{old_dir} → {new_dir}: {e}"
+            )
+
+        return new_dir
+
+    # Case 3 — fresh install
+    new_dir.mkdir(parents=True, exist_ok=True)
+    return new_dir
+
+
+BASE_CONFIG_DIR = _migrate_runtime_dir()
+
+def ensure_dir(path):
+    Path(path).mkdir(parents=True, exist_ok=True)
     return path
 
 # ---- Canonical paths ----
