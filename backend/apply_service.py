@@ -4,10 +4,25 @@ from backend.active_db import get_active_db
 from backend.execute_actions import execute_actions
 from pathlib import Path
 import sqlite3
+import sys
+
 
 from backend.consolidate_music import analyze_files
 
+if not sys.stdin.isatty():
+    raise RuntimeError(
+        "Permanent delete requires an interactive terminal."
+    )
 
+def count_permanent_deletes(conn) -> int:
+    row = conn.execute("""
+        SELECT COUNT(*)
+        FROM actions
+        WHERE action='delete'
+        AND status='pending'
+    """).fetchone()
+
+    return row[0] if row else 0
 
 def apply_actions(
     *,
@@ -16,6 +31,8 @@ def apply_actions(
     confirm_permanent: bool = False,
     limit: int | None = None,
     normalize_art: bool = False,
+    trash_root: str | None = None,
+    allow_create_trash: bool = False,
 ) -> dict:
 
     lock = acquire_lock("apply")
@@ -32,11 +49,35 @@ def apply_actions(
         if not Path(db_path).exists():
             raise RuntimeError("ACTIVE_DB_NOT_FOUND")
 
+        if trash_root and not isinstance(trash_root, str):
+            raise RuntimeError("INVALID_TRASH_ROOT")
+
         # Validate dangerous intent
         if permanent_delete and not confirm_permanent:
             raise RuntimeError(
                 "PERMANENT_DELETE_REQUIRES_CONFIRMATION"
             )
+        if permanent_delete:
+            conn = sqlite3.connect(db_path)
+
+            delete_count = count_permanent_deletes(conn)
+
+            if delete_count > 0 and not confirm_permanent:
+                print()
+                print("⚠️  PERMANENT DELETE REQUESTED")
+                print()
+                print(f"{delete_count} files will be permanently deleted.")
+                print("This CANNOT be undone.")
+                print()
+
+                typed = input("Type DELETE (all caps) to permanently obliterate these files: ")
+
+                if typed != "DELETE":
+                    print("Aborted.")
+                    return {"aborted": True}
+
+            conn.close()
+
         # Ensure DB schema is up to date (no scanning, no filesystem changes)
         analyze_files(
             src=None,
@@ -68,6 +109,8 @@ def apply_actions(
             dry_run=dry_run,
             limit=limit,
             normalize_art=normalize_art,
+            trash_root=trash_root,
+            allow_create_trash=allow_create_trash,
         )
         return summary
     finally:

@@ -1,4 +1,90 @@
 # Changelog
+Pedro follows semantic versioning.
+Breaking changes will always be clearly documented.
+
+## [0.8.0] — Pedro Organiza 0.8 — Pedro Organiza 0.8 — A Deterministic Music Library Manager Built for Safety
+🚀 Pedro Organiza 0.8.0
+
+This release solidifies Pedro’s core architecture and safety model.
+It focuses on making file operations predictable, reviewable, and safe.
+
+🔒 Deterministic Filesystem Engine
+Pedro now applies file operations in a strictly deterministic way.
+
+That means:
+* The same database state always produces the same filesystem result.
+* There are no hidden side effects.
+* No silent modifications.
+* No unexpected behavior between runs.
+* Every action (move, archive, delete) is computed first and then executed in a controlled and repeatable way.
+
+This makes Pedro predictable — especially important for large music libraries.
+
+👀 Preview-First Architecture
+Before anything touches your filesystem, you can preview exactly what will happen.
+
+New dedicated command:
+$>pedro preview
+
+This shows:
+How many files will be moved
+* Archived
+* Deleted (quarantined or permanently)
+* Skipped
+
+You can also limit previews:
+$>pedro preview --limit 10
+
+The apply command also supports:
+$>pedro apply --dry-run
+
+Which simulates execution without making any changes.
+Nothing happens unless you explicitly tell Pedro to apply it.
+Safety is the default.
+
+Schema-Safe Database Migrations
+Pedro now supports automatic, non-destructive database schema upgrades.
+
+When new columns or features are introduced:
+* Your existing database is upgraded automatically.
+* No full re-scan is required.
+* No data is lost.
+* No manual SQL needed.
+
+This allows Pedro to evolve over time without breaking your existing library.
+
+🗑 Improved Deletion Safety
+Deletion behavior is now explicit and guarded:
+
+* By default, files are quarantined — not permanently deleted.
+* Permanent deletion requires explicit confirmation.
+* Permanent delete operation requires typing DELETE interactively.
+* A lock file prevents concurrent apply operations.
+
+Pedro assumes your music library is valuable — because it is.
+
+🧭 CLI Structure Improvements
+The CLI has been reorganized for clarity:
+* pedro db namespace for database operations
+* pedro analyze (alias: scan)
+* pedro preview
+* pedro apply
+* pedro version
+
+The help output is now cleaner and more structured.
+
+🏗 Architectural Foundation for Future Features
+0.8.0 focuses on backend integrity.
+This lays the groundwork for:
+* Export Profiles
+* Partial exports
+* Advanced filters
+* UI improvements
+* Safer batch operations
+
+This release strengthens the foundation before expanding functionality.
+
+
 
 ## [0.7.0] — Structural Confidence Release
 

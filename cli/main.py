@@ -11,17 +11,18 @@ from cli.genres import register_genres_commands, handle_genres
 from backend.db_state import set_active_db, get_active_db, clear_active_db
 from backend.startup_service import inspect_pedro_db
 
+import importlib.metadata
 
 def main():
     parser = argparse.ArgumentParser(
         prog="pedro",
-        description="Pedro Organiza CLI"
+        description="Pedro Organiza — deterministic music library management"
     )
 
     parser.add_argument(
         "--lang",
         default="en",
-        help="Language"
+        help="Override UI language (en, es, de)"
     )
 
     parser.add_argument(
@@ -30,15 +31,42 @@ def main():
         help="Raw (non-localized) output"
     )
 
+    parser = argparse.ArgumentParser(
+        prog="pedro",
+        description="Pedro Organiza — deterministic music library management",
+        epilog="""
+    Examples:
+
+    pedro db set music.db
+    pedro analyze --src ~/Downloads --lib ~/Music
+    pedro preview
+    pedro apply --dry-run
+    """
+    )
+
     subparsers = parser.add_subparsers(
         dest="command",
         required=True
     )
 
+    subparsers.add_parser(
+        "version",
+        help="Show Pedro version"
+    )
+
     # ---------------- DB commands ----------------
-    subparsers.add_parser("db-set").add_argument("path")
-    subparsers.add_parser("db-show-active")
-    subparsers.add_parser("db-clear")
+    db_parser = subparsers.add_parser(
+        "db",
+        help="Database management"
+    )
+
+    db_sub = db_parser.add_subparsers(dest="db_cmd", required=True)
+
+    db_set = db_sub.add_parser("set", help="Set active database")
+    db_set.add_argument("path")
+
+    db_sub.add_parser("show-active", help="Show active database")
+    db_sub.add_parser("clear", help="Clear active database")
 
     # ---------------- STATUS ----------------
     status = subparsers.add_parser(
@@ -52,19 +80,13 @@ def main():
     )
 
     # ---------------- SCAN ----------------
-    scan = subparsers.add_parser(
-        "scan",
-        help = argparse.SUPPRESS,  
-        description=argparse.SUPPRESS
-    )
-    
-
-    # ---------------- ANALYZE (alias for scan) ----------------
     analyze = subparsers.add_parser(
         "analyze",
-        help="Analyze music library and update database",
-        description=scan.description
+        aliases=["scan"],
+        help="Analyze music library and update database"
     )
+
+    # ---------------- ANALYZE (alias for scan) ----------------
 
     analyze.add_argument("--src", help="Source music directory")
     analyze.add_argument("--lib", help="Canonical library root")
@@ -90,6 +112,12 @@ def main():
         help="Do not overwrite existing metadata"
     )
 
+    # ---------------- PREVIEW ----------------
+    preview_parser = subparsers.add_parser(
+        "preview",
+        help="Preview pending filesystem actions (read-only)"
+    )
+
     # ---------------- GENRES ----------------
     register_genres_commands(subparsers)
 
@@ -104,18 +132,19 @@ def main():
         action="store_true",
         help="Simulate execution without modifying files"
     )
-    
-    apply_parser.add_argument(
-        "--preview", 
-        action="store_true",
-        help="Simulate execution without modifying files"
-    )
 
     apply_parser.add_argument(
         "--limit",
         type=int,
         help="Limit number of actions"
     )
+    
+    apply_parser.add_argument(
+        "--create-trash-root",
+        action="store_true",
+        help="Allow automatic creation of the override trash directory"
+    )
+    
 
     apply_parser.add_argument(
         "--delete-permanent",
@@ -143,25 +172,29 @@ def main():
 
     # ---------------- Parse args ----------------
     args = parser.parse_args()
-
+    if args.command == "version":
+        print(importlib.metadata.version("pedro-organiza"))
+        return
+    
     # ---------------- DB commands ----------------
-    if args.command == "db-set":
-        set_active_db(args.path)
-        print(f"{msg('DB_SET')}: {args.path}")
-        return
+    if args.command == "db":
+        if args.db_cmd == "set":
+            set_active_db(args.path)
+            print(f"{msg('DB_SET')}: {args.path}")
+            return
 
-    if args.command == "db-show-active":
-        db = get_active_db()
-        if db:
-            print(f"{msg('DB_ACTIVE')}: {db}")
-        else:
-            print(msg("NO_ACTIVE_DB"))
-        return
+        if args.db_cmd == "show-active":
+            db = get_active_db()
+            if db:
+                print(f"{msg('DB_ACTIVE')}: {db}")
+            else:
+                print(msg("NO_ACTIVE_DB"))
+            return
 
-    if args.command == "db-clear":
-        clear_active_db()
-        print(msg("DB_CLEARED"))
-        return
+        if args.db_cmd == "clear":
+            clear_active_db()
+            print(msg("DB_CLEARED"))
+            return
 
     # ---------------- STATUS ----------------
     if args.command == "status":
@@ -233,64 +266,75 @@ def main():
         return
 
     # ---------------- Commands that require DB ----------------
+    # ---------------- Commands that require DB ----------------
     db_path = get_active_db()
     if not db_path or not os.path.exists(db_path):
         print(msg("MUSIC_DB_NOT_SET"))
         return
 
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
 
-    try:
-        if args.command == "genres":
+    # ---------- GENRES ----------
+    if args.command == "genres":
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
             handle_genres(args, conn)
+        return
 
-        elif args.command in ("scan", "analyze"):
-            from backend.consolidate_music import analyze_files
 
-            analyze_files(
-                src=args.src,
-                lib=args.lib,
-                db_path=db_path,
-                progress=True,
-                with_fingerprint=args.with_fingerprint,
-                search_covers=args.search_covers,
-                db_mode=args.db_mode,
-                no_overwrite=args.no_overwrite,
+    # ---------- ANALYZE ----------
+    elif args.command == "analyze":
+        from backend.consolidate_music import analyze_files
+
+        analyze_files(
+            src=args.src,
+            lib=args.lib,
+            db_path=db_path,
+            progress=True,
+            with_fingerprint=args.with_fingerprint,
+            search_covers=args.search_covers,
+            db_mode=args.db_mode,
+            no_overwrite=args.no_overwrite,
+        )
+        return
+
+
+    # ---------- PREVIEW ----------
+    elif args.command == "preview":
+        from backend.preview_service import preview_apply
+
+        result = preview_apply(limit=args.limit)
+        print(json.dumps(result, indent=2))
+        return
+
+
+    # ---------- APPLY ----------
+    elif args.command == "apply":
+
+        from backend.apply_service import apply_actions
+
+        try:
+            summary = apply_actions(
+                dry_run=args.dry_run,
+                permanent_delete=args.delete_permanent,
+                confirm_permanent=args.confirm_permanent,
+                limit=args.limit,
+                normalize_art=args.normalize_art,
+                trash_root=args.trash_root,
+                allow_create_trash=args.create_trash_root,
             )
-        elif args.command == "apply":
 
-            # ---------- PREVIEW (read-only, no locks, no engine) ----------
-            if args.preview:
-                from backend.preview_service import preview_apply
-
-                result = preview_apply(limit=args.limit)
-                print(json.dumps(result, indent=2))
-                return
-
-            # ---------- APPLY / DRY-RUN ----------
-            from backend.apply_service import apply_actions
-
-            try:
-                summary = apply_actions(
-                    dry_run=args.dry_run,
-                    permanent_delete=args.delete_permanent,
-                    confirm_permanent=args.confirm_permanent,
-                    limit=args.limit,
-                    normalize_art=args.normalize_art,
-                    trash_root=args.trash_root,
-                )
-
-                print(json.dumps(summary, indent=2))
-
-            except RuntimeError as e:
-                print(str(e))
-                return
-            
             print(json.dumps(summary, indent=2))
-    finally:
-        conn.close()
 
+        except RuntimeError as e:
+            print(str(e))
+
+        return
+    
+epilog="""
+    Pedro is deterministic by design.
+    Always run preview before apply.
+    Dry-run is your friend.
+    """
 
 if __name__ == "__main__":
     main()

@@ -4,8 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pedro-organiza"
-version = "0.7.0"
-requires-python = ">=3.9"
+version = "0.8.0"
+requires-python = ">=3.10"
+
+dependencies = [
+    "pydantic>=2.0",
+    "python-dotenv",
+    "platformdirs",
+    "mutagen",
+    "pillow",
+    "tqdm",
+]
 
 [project.scripts]
 pedro = "cli.main:main"
@@ -15,7 +24,7 @@ packages = ["cli", "backend"]
 
 [tool.ruff]
 line-length = 88
-target-version = "py39"
+target-version = "py310"
 exclude = ["build", "dist", ".venv", "__pycache__"]
 
 
