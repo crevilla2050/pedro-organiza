@@ -1,8 +1,12 @@
 # Pedro Organiza 🎵
 
-**A deterministic, review-before-apply music library intelligence system**
+**A deterministic, non-destructive music library manager for large collections**
 
-Pedro Organiza is a **local-first music library analysis and curation system** designed for large, messy, real-world collections.
+Pedro Organiza is a **local-first music library manager and organizer** designed to analyze, clean, deduplicate, and safely restructure large real-world music collections.
+
+Ideal for collectors, DJs, archivists, and anyone whose library has outgrown traditional players like iTunes or Apple Music.
+
+Pedro is built to handle collections ranging from **tens of thousands to hundreds of thousands of tracks** while prioritizing safety over automation.
 
 Pedro does **not** rename, delete, move, or modify your files by default.
 
@@ -16,18 +20,21 @@ Instead, it:
 
 > **Knowledge first. Actions later. Always auditable.**
 
-Pedro is built for people who:
+Pedro is designed for:
 
-* Have tens of thousands of tracks
-* Don’t trust one-click automation
-* Want control, traceability, and reproducibility
+- Large personal music collections  
+- Audiophiles and serious collectors  
+- DJs managing performance libraries  
+- Archivists preserving long-term catalogs  
+- Users migrating away from iTunes / Apple Music  
+- Anyone who refuses to risk silent data loss
 
 This is not a cleanup script.
 This is a **library intelligence system**.
 
 ---
 
-## Why Pedro Organiza Exists
+## Why Traditional Music Managers Fail at Scale
 
 Most music tools assume:
 
@@ -48,6 +55,12 @@ Pedro Organiza is designed for:
 
 Pedro does not guess what you want.
 It gives you **structure, signals, and context** so you can decide correctly.
+
+Many music tools work well for small libraries but begin to break down as collections grow. 
+
+Pedro Organiza was engineered specifically for **large, long-lived music libraries** where data safety, traceability, and deterministic behavior matter.
+
+Supports common formats including MP3, FLAC, WAV, AAC, OGG and more.
 
 ---
 
@@ -138,7 +151,9 @@ Pedro Organiza follows a **layered pipeline by design**.
 
 ---
 
-## What Pedro Can Do Today (v0.5.0)
+## What Pedro Can Do Today (v0.8.0)
+
+Pedro has been engineered with scalability in mind and is suitable for extremely large libraries.
 
 ### Backend / CLI
 
@@ -191,7 +206,7 @@ Pedro Organiza is a **library intelligence system**, not a magic wand.
 
 ---
 
-## Installation
+## Installation — Local Music Library Manager
 
 Pedro Organiza is distributed as a **local CLI tool** with an optional UI.
 
@@ -257,7 +272,7 @@ pedro-organiza/
 
 ---
 
-## Current Status (v0.5.0)
+## Current Status (v0.8.0)
 
 * Ingestion pipeline: **stable**
 * Alias clustering: **stable**
@@ -273,6 +288,16 @@ Pedro is best suited for users comfortable with:
 * SQLite
 * Inspectable systems
 
+## Common Use Cases
+
+Pedro Organiza is commonly used for:
+
+- Managing very large music libraries
+- Organizing MP3 collections
+- Deduplicating music files safely
+- Replacing iTunes / Apple Music for local libraries
+- Offline music library management
+
 ---
 
 ## Roadmap Highlights
@@ -282,9 +307,7 @@ Pedro is best suited for users comfortable with:
 * Execution audit trail UI
 * Playlist export (M3U, XSPF, XML)
 * Canonical resolution workflows
-* Mini audio player (UI)
 
----
 
 ## License
 

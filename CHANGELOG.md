@@ -2,7 +2,7 @@
 Pedro follows semantic versioning.
 Breaking changes will always be clearly documented.
 
-## [0.8.0] — Pedro Organiza 0.8 — Pedro Organiza 0.8 — A Deterministic Music Library Manager Built for Safety
+## [0.8.0] — Pedro Organiza 0.8 — A Deterministic Music Library Manager Built for Safety
 🚀 Pedro Organiza 0.8.0
 
 This release solidifies Pedro’s core architecture and safety model.
