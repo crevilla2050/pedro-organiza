@@ -46,7 +46,7 @@ from pathlib import Path
 from mutagen import File as MutagenFile
 from dotenv import load_dotenv
 from backend.normalization import normalize_text
-from datetime import datetime
+from backend.db_migrations import run_migrations
 
 try:
     from tqdm import tqdm
@@ -333,6 +333,8 @@ def ensure_column(c, table, column, ddl):
         })
         c.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
 
+def ensure_export_columns(c):
+    ensure_column(c, "files", "export_name_cache", "export_name_cache TEXT")
 
 def ensure_normalized_columns(c):
     ensure_column(c, "files", "artist_norm", "artist_norm TEXT")
@@ -491,15 +493,45 @@ def ensure_mark_delete_column(c):
         """)
 
 def ensure_genres_columns(c):
-        """
-        Ensure optional / forward-compatible columns on `genres`.
-        """
-        ensure_column(
-            c,
-            "genres",
-            "active",
-            "active INTEGER DEFAULT 1"
+    """
+    Ensure optional / forward-compatible columns on `genres`.
+    """
+    ensure_column(
+        c,
+        "genres",
+        "active",
+        "active INTEGER DEFAULT 1"
+    )
+
+def ensure_export_tables(c):
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS export_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            preset_name TEXT NOT NULL,
+            preset_hash TEXT NOT NULL,
+            target_root TEXT NOT NULL,
+            file_count INTEGER NOT NULL,
+            total_bytes INTEGER NOT NULL,
+            deterministic_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            dry_run INTEGER DEFAULT 0
         )
+    """)
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS export_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            export_run_id INTEGER NOT NULL,
+            file_id INTEGER NOT NULL,
+            src_path TEXT NOT NULL,
+            dst_path TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            status TEXT DEFAULT 'planned',
+            FOREIGN KEY(export_run_id) REFERENCES export_runs(id),
+            FOREIGN KEY(file_id) REFERENCES files(id)
+        )
+    """)
 
 def normalize_file_row(c, file_id):
     """Compute and persist normalized textual fields for a file.
@@ -546,33 +578,13 @@ def normalize_file_row(c, file_id):
 # ================= DATABASE =================
 
 def create_db(db_path):
-    """Create the SQLite schema used by the consolidation pipeline.
-
-    The schema is intentionally minimal and focused on the needs of
-    the analysis stage. Important tables:
-    - `files`: discovered audio files and their extracted metadata
-    - `album_art`: candidate artwork for albums
-    - `actions`: explicit intents such as move/copy operations
-    - `genres`, `genre_mappings`, `file_genres`: lightweight genre
-      normalization and mapping support
-
-    This function is safe to call repeatedly; `CREATE TABLE IF NOT
-    EXISTS` and idempotent migrations (see `ensure_column`) allow
-    incremental upgrades without complex migration tooling.
-    """
+    """Create the SQLite schema used by the consolidation pipeline."""
 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
 
-    # --- Ensure all tables have the required columns ---
-    
-    ensure_metadata_columns(c)
-    ensure_normalized_columns(c)
-    ensure_genres_columns(c)
-    ensure_alias_views(c)
-    ensure_mark_delete_column(c)
-
+    # ================= CORE SCHEMA =================
     c.executescript("""
     PRAGMA foreign_keys = ON;
 
@@ -600,6 +612,31 @@ def create_db(db_path):
         quarantined_path TEXT,
         quarantined_at TEXT,
         delete_mode TEXT DEFAULT 'quarantine'
+    );
+
+    CREATE TABLE IF NOT EXISTS export_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        preset_name TEXT NOT NULL,
+        preset_hash TEXT NOT NULL,
+        target_root TEXT NOT NULL,
+        file_count INTEGER NOT NULL,
+        total_bytes INTEGER NOT NULL,
+        deterministic_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        dry_run INTEGER DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS export_files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        export_run_id INTEGER NOT NULL,
+        file_id INTEGER NOT NULL,
+        src_path TEXT NOT NULL,
+        dst_path TEXT NOT NULL,
+        sha256 TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        status TEXT DEFAULT 'planned',
+        FOREIGN KEY(export_run_id) REFERENCES export_runs(id),
+        FOREIGN KEY(file_id) REFERENCES files(id)
     );
 
     CREATE TABLE IF NOT EXISTS album_art (
@@ -695,10 +732,23 @@ def create_db(db_path):
     CREATE INDEX IF NOT EXISTS idx_file_genres_genre ON file_genres(genre_id);
     CREATE INDEX IF NOT EXISTS idx_genre_mappings_norm ON genre_mappings(normalized_token);
     CREATE INDEX IF NOT EXISTS idx_genres_active ON genres(active);
-
+    CREATE INDEX IF NOT EXISTS idx_files_lifecycle ON files(lifecycle_state);
+    CREATE INDEX IF NOT EXISTS idx_files_size ON files(size_bytes);
+    CREATE INDEX IF NOT EXISTS idx_export_runs_hash ON export_runs(deterministic_hash);
+    CREATE INDEX IF NOT EXISTS idx_export_files_run ON export_files(export_run_id);
+    CREATE INDEX IF NOT EXISTS idx_export_files_file ON export_files(file_id);
     """)
 
-    # --- Ensure single environment row exists ---
+    # Existing additive migrations (your helpers)
+    ensure_metadata_columns(c)
+    ensure_export_columns(c)
+    ensure_normalized_columns(c)
+    ensure_genres_columns(c)
+    ensure_alias_views(c)
+    ensure_mark_delete_column(c)
+    ensure_export_tables(c)
+
+    # --- Ensure pedro_environment row exists ---
     row = c.execute(
         "SELECT id FROM pedro_environment WHERE id = 1"
     ).fetchone()
@@ -710,6 +760,9 @@ def create_db(db_path):
             (id, source_root, library_root, schema_version, created_at, last_update)
             VALUES (1, NULL, NULL, 1, ?, ?)
         """, (now, now))
+
+    # ================= NEW: RUN MIGRATIONS =================
+    run_migrations(conn)
 
     conn.commit()
     return conn
@@ -875,6 +928,8 @@ def analyze_files(
     exclude_states=None,
     db_mode="full",  # "full" | "schema-only" | "db-update-only" | "normalize-only"
     no_overwrite=False,  # Only used in "db-update-only" mode
+    lifecycle_state="ANALYZED",
+    create_actions=True,
 ):
     """Top-level analysis routine."""
     ALLOWED_DB_MODES = {"full", "schema-only", "db-update-only", "normalize-only"}
@@ -912,16 +967,7 @@ def analyze_files(
     # ---------- From here on, we REQUIRE src ----------
     if not src:
         raise RuntimeError("src must be provided for db_mode = " + db_mode)
-
-    # ---------- SCHEMA-ONLY MODE ----------
-    if db_mode == "schema-only":
-        log("Schema migration only — no file scanning")
-        conn.commit()
-        conn.close()
-        return
     
-    if not src:
-        raise RuntimeError("src must be provided for db_mode = " + db_mode)
 
     # Gather all audio files
     audio_list = [p for p in Path(src).rglob("*") if is_audio_file(p)]
@@ -930,6 +976,7 @@ def analyze_files(
         "params": {"count": len(audio_list)}
     })
 
+    # Reserved for future filesystem gating
     allow_filesystem = (db_mode == "full")
 
     for p in maybe_progress(audio_list, "Analyzing", progress):
@@ -946,8 +993,12 @@ def analyze_files(
             (str(p),)
         ).fetchone()
 
-        lifecycle = row["lifecycle_state"] if row else "new"
-        is_new = row is None
+        if row:
+            lifecycle = row["lifecycle_state"]
+            is_new = False
+        else:
+            lifecycle = lifecycle_state
+            is_new = True
 
         sql = """
         INSERT INTO files (
@@ -1115,7 +1166,7 @@ def analyze_files(
             fp,
             meta["is_compilation"],
             rec,
-            lifecycle,
+            lifecycle_state,
             now,
             now,
             None,
@@ -1156,7 +1207,7 @@ def analyze_files(
 
         normalize_file_row(c, file_id)
 
-        if is_new and db_mode == "full":
+        if is_new and db_mode == "full" and create_actions:
             c.execute("""
                 INSERT INTO actions (
                     file_id, action, src_path, dst_path, created_at

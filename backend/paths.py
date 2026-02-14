@@ -1,5 +1,7 @@
 from platformdirs import user_config_dir
 from pathlib import Path
+from datetime import datetime
+
 import os
 
 APP_NAME = "pedro"
@@ -39,7 +41,6 @@ def _migrate_runtime_dir():
     new_dir.mkdir(parents=True, exist_ok=True)
     return new_dir
 
-
 BASE_CONFIG_DIR = _migrate_runtime_dir()
 
 def ensure_dir(path):
@@ -67,8 +68,23 @@ APPLY_REPORT_DIR = ensure_dir(
     os.path.join(BASE_CONFIG_DIR, "apply_reports")
 )
 
+# Diagnostics directory
+DIAGNOSTICS_DIR = ensure_dir(
+    os.path.join(BASE_CONFIG_DIR, "diagnostics")
+)
+
 # OS-safe temp file
 SCAN_LOCK_PATH = os.path.join(
     ensure_dir(os.path.join(BASE_CONFIG_DIR, "locks")),
     "scan.lock"
 )
+
+def auto_diagnostic_path():
+    """
+    Generate a timestamped diagnostic report path.
+
+    Example:
+    ~/.config/pedro/diagnostics/diag-2026-02-14T23-51-02.json
+    """
+    ts = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    return os.path.join(DIAGNOSTICS_DIR, f"diag-{ts}.json")

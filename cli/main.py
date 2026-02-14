@@ -7,16 +7,26 @@ import json
 
 from backend.i18n.messages import msg
 from cli.genres import register_genres_commands, handle_genres
+from cli.export_cli import register_export_subparser
 
 from backend.db_state import set_active_db, get_active_db, clear_active_db
 from backend.startup_service import inspect_pedro_db
+from backend.diagnostics import write_diagnostic_report
 
 import importlib.metadata
 
 def main():
     parser = argparse.ArgumentParser(
         prog="pedro",
-        description="Pedro Organiza — deterministic music library management"
+        description="Pedro Organiza — deterministic music library management",
+        epilog="""
+            Examples:
+
+            pedro db set music.db
+            pedro analyze --src ~/Downloads --lib ~/Music
+            pedro preview
+            pedro apply --dry-run
+            """
     )
 
     parser.add_argument(
@@ -31,17 +41,9 @@ def main():
         help="Raw (non-localized) output"
     )
 
-    parser = argparse.ArgumentParser(
-        prog="pedro",
-        description="Pedro Organiza — deterministic music library management",
-        epilog="""
-    Examples:
-
-    pedro db set music.db
-    pedro analyze --src ~/Downloads --lib ~/Music
-    pedro preview
-    pedro apply --dry-run
-    """
+    parser.add_argument(
+        "--diagnostic-file",
+        help="Write diagnostic report to file (optional path)"
     )
 
     subparsers = parser.add_subparsers(
@@ -53,6 +55,18 @@ def main():
         "version",
         help="Show Pedro version"
     )
+
+    subparsers.add_parser(
+        "migrate",
+        help="Run deterministic database migrations"
+    )
+
+    subparsers.add_parser(
+        "doctor",
+        help="Run Pedro system health checks"
+    )
+
+    register_export_subparser(subparsers)
 
     # ---------------- DB commands ----------------
     db_parser = subparsers.add_parser(
@@ -117,6 +131,7 @@ def main():
         "preview",
         help="Preview pending filesystem actions (read-only)"
     )
+    preview_parser.add_argument("--limit", type=int)
 
     # ---------------- GENRES ----------------
     register_genres_commands(subparsers)
@@ -176,6 +191,11 @@ def main():
         print(importlib.metadata.version("pedro-organiza"))
         return
     
+    # Generic subcommand handler (for modular CLIs)
+    if hasattr(args, "func"):
+        args.func(args)
+        return
+
     # ---------------- DB commands ----------------
     if args.command == "db":
         if args.db_cmd == "set":
@@ -206,6 +226,7 @@ def main():
             "is_pedro_db": False,
             "files": None,
             "genres": None,
+            "schema_version": None,
         }
 
         if not db_path:
@@ -253,6 +274,34 @@ def main():
             result["genres"] = conn.execute(
                 "SELECT COUNT(*) AS c FROM genres"
             ).fetchone()["c"]
+
+            schema = conn.execute(
+                "SELECT schema_version FROM pedro_environment WHERE id=1"
+            ).fetchone()["schema_version"]
+            result["schema_version"] = schema
+        
+            from backend.db_migrations import get_code_schema_version
+
+            code_schema = get_code_schema_version()
+            result["code_schema_version"] = code_schema
+
+            if result["schema_version"] < code_schema:
+                result["schema_outdated"] = True
+            else:
+                result["schema_outdated"] = False
+            
+            if result["schema_version"] < result["code_schema_version"]:
+                print("⚠ Schema is outdated — run: pedro migrate")
+            
+            if result["schema_version"] > result["code_schema_version"]:
+                result["schema_ahead"] = True
+            else:
+                result["schema_ahead"] = False
+            
+            if result.get("schema_ahead"):
+                print("⚠ Database schema is newer than this Pedro version")
+                print("   Consider upgrading Pedro.")
+
         finally:
             conn.close()
 
@@ -262,15 +311,49 @@ def main():
             print(msg("PEDRO_DB_OK"))
             print(f"{msg('FILES_COUNT')}: {result['files']}")
             print(f"{msg('GENRES_COUNT')}: {result['genres']}")
+            print(f"{msg('SCHEMA_VERSION')}: {result['schema_version']}")
 
         return
 
     # ---------------- Commands that require DB ----------------
     # ---------------- Commands that require DB ----------------
     db_path = get_active_db()
-    if not db_path or not os.path.exists(db_path):
+
+    # Commands that are allowed to bootstrap a new DB
+    BOOTSTRAP_COMMANDS = {"analyze", "scan"}
+
+    if not db_path:
         print(msg("MUSIC_DB_NOT_SET"))
         return
+
+    # If DB path exists but file doesn't:
+    # Allow analyze to create it, block everything else
+    if not os.path.exists(db_path) and args.command not in BOOTSTRAP_COMMANDS:
+        print(msg("DB_FILE_NOT_FOUND"))
+        return
+
+    from backend.paths import BASE_CONFIG_DIR
+    from pathlib import Path
+    import datetime
+
+    if args.command in ("doctor", "status") or args.diagnostic_file is not None:
+        from pathlib import Path
+        from datetime import datetime
+        from backend.paths import BASE_CONFIG_DIR
+        from backend.diagnostics import write_diagnostic_report
+
+        # Decide output path
+        if args.diagnostic_file:
+            out_path = args.diagnostic_file
+        else:
+            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+            out_path = str(Path(BASE_CONFIG_DIR) / f"diagnostic-{ts}.json")
+
+        # Generate diagnostic
+        hash_value = write_diagnostic_report(db_path, out_path)
+
+        print(f"Diagnostic written to: {out_path}")
+        print(f"Deterministic hash: {hash_value}")
 
 
     # ---------- GENRES ----------
@@ -297,15 +380,13 @@ def main():
         )
         return
 
-
     # ---------- PREVIEW ----------
     elif args.command == "preview":
         from backend.preview_service import preview_apply
 
-        result = preview_apply(limit=args.limit)
+        result = preview_apply(limit=getattr(args, "limit", None))
         print(json.dumps(result, indent=2))
         return
-
 
     # ---------- APPLY ----------
     elif args.command == "apply":
@@ -330,11 +411,32 @@ def main():
 
         return
     
-epilog="""
-    Pedro is deterministic by design.
-    Always run preview before apply.
-    Dry-run is your friend.
-    """
+    elif args.command == "migrate":
+        from backend.db_migrations import run_migrations
+
+        # ---------------- Commands that require DB ----------------
+        db_path = get_active_db()
+
+        # Commands that REQUIRE an existing DB file
+        commands_requiring_existing_db = {"preview", "apply", "genres", "status", "doctor", "migrate"}
+
+        if not db_path:
+            print(msg("MUSIC_DB_NOT_SET"))
+            return
+
+        if args.command in commands_requiring_existing_db and not os.path.exists(db_path):
+            print(msg("DB_FILE_NOT_FOUND"))
+            return
+
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            final = run_migrations(conn, verbose=True)
+            print(f"Schema now at version {final}")
+        finally:
+            conn.close()
+        return
+
 
 if __name__ == "__main__":
     main()
