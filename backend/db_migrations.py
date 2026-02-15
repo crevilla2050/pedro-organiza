@@ -145,7 +145,7 @@ def migrate_3_to_4(conn):
         file_id INTEGER NOT NULL,
         library_id INTEGER NOT NULL,
         first_seen TEXT NOT NULL,
-        last_seen TEXT NOT NULL,
+        last_update TEXT NOT NULL,
         drifted INTEGER DEFAULT 0,
         drifted_at TEXT,
         PRIMARY KEY (file_id, library_id),
