@@ -152,7 +152,15 @@ def execute_actions(
     dry_run=False,
     limit=None,
     normalize_art=False,
+    allow_create_trash=False,  # <-- NEW (forward compatibility)
 ):
+    """Execute pending filesystem actions from the database.
+
+    This is the core of the application logic. It is designed to be
+    idempotent and safe to retry. It is also designed to be safe to run
+    concurrently with other instances of the application, as long as they
+    are not modifying the same files.
+    """
     # Allow temporary quarantine override per run.
     # Config remains authoritative unless explicitly overridden.
     if trash_root:

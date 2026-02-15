@@ -17,6 +17,15 @@ Schema version lives in:
 """
 
 from datetime import datetime, timezone
+from backend.db_schema_helpers import (
+    ensure_metadata_columns,
+    ensure_normalized_columns,
+    ensure_export_columns,
+    ensure_mark_delete_column,
+    ensure_genres_columns,
+    ensure_export_tables,
+)
+from backend.db_views import ensure_alias_views
 
 TARGET_SCHEMA_VERSION = 2
 
@@ -112,12 +121,102 @@ def migrate_2_to_3(conn):
         )
     """)
 
+def migrate_3_to_4(conn):
+    """
+    Migration v4
+    Multi-library core + schema consolidation
+    Fully additive and backward compatible
+    """
+
+    c = conn.cursor()
+
+    # ==========================================================
+    # MULTI-LIBRARY CORE
+    # ==========================================================
+    c.executescript("""
+    CREATE TABLE IF NOT EXISTS libraries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        root_path TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS file_library_map (
+        file_id INTEGER NOT NULL,
+        library_id INTEGER NOT NULL,
+        first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        drifted INTEGER DEFAULT 0,
+        drifted_at TEXT,
+        PRIMARY KEY (file_id, library_id),
+        FOREIGN KEY (file_id) REFERENCES files(id),
+        FOREIGN KEY (library_id) REFERENCES libraries(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_file_library_file
+        ON file_library_map(file_id);
+
+    CREATE INDEX IF NOT EXISTS idx_file_library_lib
+        ON file_library_map(library_id);
+    """)
+
+    # ==========================================================
+    # SCHEMA CONSOLIDATION (NEW)
+    # Moves schema helpers into migrations layer
+    # ==========================================================
+    from backend.db_schema_helpers import (
+        ensure_metadata_columns,
+        ensure_normalized_columns,
+        ensure_export_columns,
+        ensure_mark_delete_column,
+        ensure_genres_columns,
+        ensure_export_tables,
+    )
+    from backend.db_views import ensure_alias_views
+
+    ensure_metadata_columns(c)
+    ensure_normalized_columns(c)
+    ensure_export_columns(c)
+    ensure_mark_delete_column(c)
+    ensure_genres_columns(c)
+    ensure_export_tables(c)
+    ensure_alias_views(c)
+    
+    c.executescript("""
+        ALTER TABLE file_library_map
+            ADD COLUMN drifted INTEGER DEFAULT 0;
+
+        ALTER TABLE file_library_map
+            ADD COLUMN drifted_at TEXT;
+        """)
+    # --------------------------------------------
+    # Additive columns to files table
+    # (safe ALTER pattern)
+    # --------------------------------------------
+    try:
+        c.execute("ALTER TABLE files ADD COLUMN presence_state TEXT DEFAULT 'present'")
+    except Exception:
+        pass
+
+    try:
+        c.execute("ALTER TABLE files ADD COLUMN last_seen TEXT")
+    except Exception:
+        pass
+
+    # Backfill presence_state if needed
+    c.execute("""
+        UPDATE files
+        SET presence_state = 'present'
+        WHERE presence_state IS NULL
+    """)
+
 # Ordered migration chain
 MIGRATIONS = [
     (1, 2, migrate_1_to_2),
     (2, 3, migrate_2_to_3),
+    (3, 4, migrate_3_to_4),
 ]
-TARGET_SCHEMA_VERSION = 3
+TARGET_SCHEMA_VERSION = 4
 
 
 # ============================================================

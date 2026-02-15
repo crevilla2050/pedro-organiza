@@ -316,7 +316,6 @@ def main():
         return
 
     # ---------------- Commands that require DB ----------------
-    # ---------------- Commands that require DB ----------------
     db_path = get_active_db()
 
     # Commands that are allowed to bootstrap a new DB

@@ -47,6 +47,7 @@ from mutagen import File as MutagenFile
 from dotenv import load_dotenv
 from backend.normalization import normalize_text
 from backend.db_migrations import run_migrations
+from backend.scan_finalize import finalize_scan
 
 try:
     from tqdm import tqdm
@@ -204,6 +205,52 @@ def maybe_progress(it, desc=None, enable=False):
 
 def utcnow():
     return datetime.now(timezone.utc).isoformat()
+
+# ============================================================
+# MULTI-LIBRARY HELPERS (additive, backward compatible)
+# ============================================================
+
+def get_or_create_library(conn, root_path: str):
+    """
+    Register a source library if not already present.
+    Deterministic: root_path is unique key.
+    """
+    root_path = str(Path(root_path).resolve())
+
+    row = conn.execute(
+        "SELECT id FROM libraries WHERE root_path=?",
+        (root_path,),
+    ).fetchone()
+
+    if row:
+        return row["id"]
+
+    now = utcnow()
+    cur = conn.execute(
+        """
+        INSERT INTO libraries (name, root_path, created_at)
+        VALUES (?, ?, ?)
+        """,
+        (Path(root_path).name, root_path, now),
+    )
+    return cur.lastrowid
+
+
+def link_file_to_library(conn, file_id: int, library_id: int):
+    """
+    Upsert mapping between file and library.
+    """
+    now = utcnow()
+
+    conn.execute(
+        """
+        INSERT INTO file_library_map (file_id, library_id, first_seen, last_update)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(file_id, library_id)
+        DO UPDATE SET last_update=excluded.last_update
+        """,
+        (file_id, library_id, now, now),
+    )
 
 
 def is_audio_file(p: Path):
@@ -937,11 +984,24 @@ def analyze_files(
     if db_mode not in ALLOWED_DB_MODES:
         raise RuntimeError(f"Invalid db_mode: {db_mode}")
     
-    conn = create_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
     c = conn.cursor()
+
+    # ------------------------------------------------------------
+    # MULTI-LIBRARY: register current source as a library
+    # ------------------------------------------------------------
+    library_id = None
+    if src:
+        try:
+            library_id = get_or_create_library(conn, src)
+        except Exception:
+            # Fail-safe: multi-library is optional
+            library_id = None
 
     # ---------- Persist environment roots (once, correctly) ----------
     now = utcnow()
+    scan_started_at = now
 
     if db_mode in ("full", "schema-only", "db-update-only"):
         c.execute("""
@@ -1205,6 +1265,17 @@ def analyze_files(
             (str(p),)
         ).fetchone()[0]
 
+        # ------------------------------------------------------------
+        # MULTI-LIBRARY: register current source as a library
+        # ------------------------------------------------------------
+        library_id = None
+        if src:
+            try:
+                library_id = get_or_create_library(conn, src)
+            except Exception:
+                # Fail-safe: multi-library is optional
+                library_id = None
+
         normalize_file_row(c, file_id)
 
         if is_new and db_mode == "full" and create_actions:
@@ -1223,6 +1294,13 @@ def analyze_files(
 
             # ingest_album_art_for_file(c, file_row, p)
     
+
+        # ---------------- FINALIZE SCAN ----------------
+    try:
+        if library_id:
+            finalize_scan(conn, library_id, scan_started_at)
+    except Exception as e:
+        log(f"[Pedro] Scan finalize warning: {e}")
 
     conn.commit()
     conn.close()
