@@ -492,12 +492,6 @@ Contributions are welcome, especially in:
 
 ---
 
-# License
-
-(Choose your license here — MIT, Apache‑2.0, etc.)
-
----
-
 # Final Words
 
 Pedro exists because music libraries deserve better tools.
