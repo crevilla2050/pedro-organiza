@@ -12,6 +12,7 @@ from cli.export_cli import register_export_subparser
 from backend.db_state import set_active_db, get_active_db, clear_active_db
 from backend.startup_service import inspect_pedro_db
 from backend.diagnostics import write_diagnostic_report
+from backend.dupe_service import suggest_primary
 
 import importlib.metadata
 
@@ -135,6 +136,55 @@ def main():
 
     # ---------------- GENRES ----------------
     register_genres_commands(subparsers)
+
+    # ---------------- DUPLICATES ----------------
+    dup_parser = subparsers.add_parser(
+        "dupes",
+        help="Duplicate cluster analysis"
+    )
+    dup_sub = dup_parser.add_subparsers(dest="dup_cmd", required=True)
+
+    # ---------------- DUPES SUGGEST ----------------
+    suggest = dup_sub.add_parser(
+        "suggest",
+        help="Suggest primary file for a duplicate cluster",
+    )
+
+    suggest.add_argument("cluster_id", type=int)
+
+    suggest.add_argument(
+        "--prefer-smallest",
+        action="store_true",
+        help="Prefer smallest file instead of largest",
+    )
+
+    suggest.add_argument(
+        "--prefer-lossy",
+        action="store_true",
+        help="Prefer lossy formats instead of lossless",
+    )
+
+    suggest.add_argument(
+        "--prefer-container",
+        help="Comma-separated container priority (e.g. mp3,ogg,aac)",
+    )
+
+    suggest.add_argument(
+        "--ignore-detected",
+        action="store_true",
+        help="Ignore detected container and use extension only",
+    )
+
+    dup_sub.add_parser(
+        "stats",
+        help="Show duplicate cluster statistics"
+    )
+
+    largest_parser = dup_sub.add_parser(
+        "largest",
+        help="Show largest duplicate clusters"
+    )
+    largest_parser.add_argument("--top", type=int, default=10)
 
     # ---------------- APPLY ----------------
     apply_parser = subparsers.add_parser(
@@ -362,6 +412,62 @@ def main():
             handle_genres(args, conn)
         return
 
+    # ---------- DUPLICATES ----------
+    elif args.command == "dupes":
+        from backend.dupe_service import list_clusters, cluster_stats
+
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+
+            if args.dup_cmd == "stats":
+                stats = cluster_stats(conn)
+                print(json.dumps(stats, indent=2))
+                return
+
+            if args.dup_cmd == "largest":
+                clusters = list_clusters(conn)[:args.top]
+                payload = {
+                    "top": args.top,
+                    "clusters": clusters,
+                }
+                print(json.dumps(payload, indent=2))
+                return
+
+            if args.dup_cmd == "suggest":
+                from backend.dupe_service import suggest_primary
+                from backend.dupe_service import find_cluster_by_member, get_cluster
+
+                containers = []
+                if args.prefer_container:
+                    containers = [
+                        c.strip().lower()
+                        for c in args.prefer_container.split(",")
+                        if c.strip()
+                    ]
+
+                cluster_id = args.cluster_id
+
+                # fallback: treat input as file_id
+                if not get_cluster(conn, cluster_id):
+                    resolved = find_cluster_by_member(conn, cluster_id)
+                    if resolved:
+                        cluster_id = resolved
+
+                result = suggest_primary(
+                    conn,
+                    cluster_id,
+                    prefer_lossless=not args.prefer_lossy,
+                    prefer_largest=not args.prefer_smallest,
+                    prefer_containers=containers,
+                    ignore_detected=args.ignore_detected,
+                )
+
+                print(json.dumps(result, indent=2))
+                return
+
+        print("Unknown dup subcommand")
+        return
+        
 
     # ---------- ANALYZE ----------
     elif args.command == "analyze":

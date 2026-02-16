@@ -18,6 +18,7 @@ Schema version lives in:
 
 from datetime import datetime, timezone
 from backend.db_schema_helpers import (
+    ensure_container_column,
     ensure_metadata_columns,
     ensure_normalized_columns,
     ensure_export_columns,
@@ -26,8 +27,6 @@ from backend.db_schema_helpers import (
     ensure_export_tables,
 )
 from backend.db_views import ensure_alias_views
-
-TARGET_SCHEMA_VERSION = 2
 
 def utcnow():
     return datetime.now(timezone.utc).isoformat()
@@ -61,17 +60,93 @@ def set_schema_version(conn, version):
         (version, utcnow()),
     )
 
+def ensure_environment_table(conn):
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS pedro_environment (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            schema_version INTEGER NOT NULL,
+            source_root TEXT,
+            library_root TEXT,
+            last_update TEXT
+        )
+    """)
+
+    # Ensure singleton row
+    row = c.execute("SELECT COUNT(*) FROM pedro_environment").fetchone()[0]
+    if row == 0:
+        c.execute("""
+            INSERT INTO pedro_environment (id, schema_version)
+            VALUES (1, 0)
+        """)
+        conn.commit()
 
 # ============================================================
 # MIGRATIONS
 # ============================================================
+
+def migrate_0_to_1(conn):
+    """
+    Migration v1
+    Base Pedro schema (core tables)
+    """
+    c = conn.cursor()
+
+    c.executescript("""
+    CREATE TABLE IF NOT EXISTS files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        original_path TEXT UNIQUE,
+        sha256 TEXT,
+        size_bytes INTEGER,
+        artist TEXT,
+        album_artist TEXT,
+        album TEXT,
+        title TEXT,
+        track TEXT,
+        genre TEXT,
+        duration REAL,
+        bitrate INTEGER,
+        fingerprint TEXT,
+        is_compilation INTEGER DEFAULT 0,
+        recommended_path TEXT,
+        lifecycle_state TEXT DEFAULT 'new',
+        first_seen TEXT,
+        last_update TEXT,
+        notes TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS genres (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT,
+        normalized_name TEXT
+    );
+    
+    CREATE TABLE IF NOT EXISTS actions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_id INTEGER NOT NULL,
+        action TEXT NOT NULL,
+        src_path TEXT,
+        dst_path TEXT,
+        created_at TEXT NOT NULL,
+        executed_at TEXT,
+        status TEXT DEFAULT 'pending',
+        FOREIGN KEY(file_id) REFERENCES files(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_actions_file
+        ON actions(file_id);
+
+    CREATE INDEX IF NOT EXISTS idx_actions_status
+        ON actions(status);
+    """)
+
+    conn.commit()
 
 def migrate_1_to_2(conn):
     """
     Migration v2
     Introduces export engine tables.
     """
-
     c = conn.cursor()
 
     c.executescript("""
@@ -109,6 +184,7 @@ def migrate_1_to_2(conn):
     CREATE INDEX IF NOT EXISTS idx_export_files_file
         ON export_files(file_id);
     """)
+    
 
 def migrate_2_to_3(conn):
     c = conn.cursor()
@@ -161,8 +237,7 @@ def migrate_3_to_4(conn):
     """)
 
     # ==========================================================
-    # SCHEMA CONSOLIDATION (NEW)
-    # Moves schema helpers into migrations layer
+    # SCHEMA CONSOLIDATION
     # ==========================================================
     from backend.db_schema_helpers import (
         ensure_metadata_columns,
@@ -171,6 +246,7 @@ def migrate_3_to_4(conn):
         ensure_mark_delete_column,
         ensure_genres_columns,
         ensure_export_tables,
+        ensure_column,
     )
     from backend.db_views import ensure_alias_views
 
@@ -181,37 +257,28 @@ def migrate_3_to_4(conn):
     ensure_genres_columns(c)
     ensure_export_tables(c)
     ensure_alias_views(c)
-    
-    c.executescript("""
-        ALTER TABLE file_library_map
-            ADD COLUMN drifted INTEGER DEFAULT 0;
 
-        ALTER TABLE file_library_map
-            ADD COLUMN drifted_at TEXT;
-        """)
-    # --------------------------------------------
-    # Additive columns to files table
-    # (safe ALTER pattern)
-    # --------------------------------------------
-    try:
-        c.execute("ALTER TABLE files ADD COLUMN presence_state TEXT DEFAULT 'present'")
-    except Exception:
-        pass
+    from backend.db_schema_helpers import ensure_container_column
+    ensure_container_column(c)
 
-    try:
-        c.execute("ALTER TABLE files ADD COLUMN last_seen TEXT")
-    except Exception:
-        pass
+    # ==========================================================
+    # FILES PRESENCE TRACKING (idempotent)
+    # ==========================================================
+    ensure_column(c, "files", "presence_state", "presence_state TEXT DEFAULT 'present'")
+    ensure_column(c, "files", "last_seen", "last_seen TEXT")
 
-    # Backfill presence_state if needed
+    # Backfill presence_state
     c.execute("""
         UPDATE files
         SET presence_state = 'present'
         WHERE presence_state IS NULL
     """)
 
+    conn.commit()
+
 # Ordered migration chain
 MIGRATIONS = [
+    (0, 1, migrate_0_to_1),
     (1, 2, migrate_1_to_2),
     (2, 3, migrate_2_to_3),
     (3, 4, migrate_3_to_4),
@@ -224,7 +291,10 @@ TARGET_SCHEMA_VERSION = 4
 # ============================================================
 
 def run_migrations(conn, verbose=True):
+    
     c = conn.cursor()
+
+    ensure_environment_table(conn)
 
     # --------------------------------------------------
     # BOOTSTRAP: ensure migration_history exists
@@ -241,6 +311,7 @@ def run_migrations(conn, verbose=True):
     conn.commit()
 
     current = get_schema_version(conn)
+    
 
     if verbose:
         print(f"[Pedro] Current schema: {current}")

@@ -4,6 +4,10 @@ Pure SQL definitions.
 """
 
 def ensure_alias_views(c):
+    # --------------------------------------------------
+    # Base pair signals
+    # --------------------------------------------------
+
     c.execute("""
         CREATE VIEW IF NOT EXISTS alias_pairs_sha256 AS
         SELECT f1.id file_id, f2.id other_file_id, 'sha256' signal_type, 1.0 strength
@@ -18,4 +22,41 @@ def ensure_alias_views(c):
         FROM files f1
         JOIN files f2 ON f1.fingerprint = f2.fingerprint AND f1.id < f2.id
         WHERE f1.fingerprint IS NOT NULL
+    """)
+
+    # --------------------------------------------------
+    # Union of all signals
+    # --------------------------------------------------
+
+    c.execute("""
+        CREATE VIEW IF NOT EXISTS alias_pairs_all AS
+        SELECT * FROM alias_pairs_sha256
+        UNION ALL
+        SELECT * FROM alias_pairs_fingerprint
+    """)
+
+    # --------------------------------------------------
+    # Aggregate confidence per pair
+    # --------------------------------------------------
+
+    c.execute("""
+        CREATE VIEW IF NOT EXISTS alias_pair_confidence AS
+        SELECT
+            file_id,
+            other_file_id,
+            COUNT(*) signal_count,
+            SUM(strength) confidence_score
+        FROM alias_pairs_all
+        GROUP BY file_id, other_file_id
+    """)
+
+    # --------------------------------------------------
+    # Strong edges (used by dupes)
+    # --------------------------------------------------
+
+    c.execute("""
+        CREATE VIEW IF NOT EXISTS alias_strong_edges AS
+        SELECT file_id, other_file_id
+        FROM alias_pair_confidence
+        WHERE confidence_score >= 1.0
     """)

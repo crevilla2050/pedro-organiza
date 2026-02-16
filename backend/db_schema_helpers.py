@@ -84,3 +84,11 @@ def ensure_export_tables(c):
             status TEXT DEFAULT 'planned'
         )
     """)
+
+def ensure_container_column(c):
+    # Only ensure column if files table exists
+    tables = {r[0] for r in c.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    )}
+    if "files" in tables:
+        ensure_column(c, "files", "detected_container", "detected_container TEXT")

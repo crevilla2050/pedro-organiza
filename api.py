@@ -39,7 +39,7 @@ from dotenv import load_dotenv
 from fastapi import Header
 import mimetypes
 
-from tools.new_pedro_tagger import pedro_enrich_file
+from tools.enrichment.new_pedro_tagger import pedro_enrich_file
 from backend.alias_engine import clusters_as_records
 
 from backend.tag_service import (

@@ -48,6 +48,7 @@ from dotenv import load_dotenv
 from backend.normalization import normalize_text
 from backend.db_migrations import run_migrations
 from backend.scan_finalize import finalize_scan
+from backend.container_detection import detect_container_from_header
 
 try:
     from tqdm import tqdm
@@ -640,6 +641,7 @@ def create_db(db_path):
         original_path TEXT UNIQUE,
         sha256 TEXT,
         size_bytes INTEGER,
+        detected_container TEXT,
         artist TEXT,
         album_artist TEXT,
         album TEXT,
@@ -987,6 +989,15 @@ def analyze_files(
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
 
+    # Ensure detected_container column exists (late additive schema)
+    from backend.db_schema_helpers import ensure_column
+    # Only ensure column if files table exists
+    tables = {r[0] for r in c.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    )}
+    if "files" in tables:
+        ensure_column(c, "files", "detected_container", "detected_container TEXT")
+
     # ---------------- MULTI-LIBRARY ----------------
     library_id = None
     if src:
@@ -1033,6 +1044,7 @@ def analyze_files(
         fp = compute_fingerprint(p) if (with_fingerprint and db_mode == "full") else None
         rec = recommended_path_for(lib, meta, p.suffix) if db_mode == "full" else None
         now = utcnow()
+        detected_container = detect_container_from_header(str(p))
 
         row = c.execute(
             "SELECT id, lifecycle_state FROM files WHERE original_path=?",
@@ -1099,6 +1111,14 @@ def analyze_files(
             "SELECT id FROM files WHERE original_path=?",
             (str(p),)
         ).fetchone()[0]
+
+        # ---------------- STORE DETECTED CONTAINER ----------------
+        if detected_container and detected_container != "":
+            c.execute("""
+                UPDATE files
+                SET detected_container = COALESCE(detected_container, ?)
+                WHERE id = ?
+            """, (detected_container, file_id))
 
         # ---------------- MULTI-LIBRARY LINK ----------------
         if library_id:
