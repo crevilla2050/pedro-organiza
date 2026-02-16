@@ -42,7 +42,7 @@ python -m pip install --upgrade pip setuptools wheel
 # 5. Install Pedro + dependencies
 # -------------------------------
 echo "[INFO] Installing Pedro Organiza and dependencies..."
-pip install .
+pip install -e .
 
 # -------------------------------
 # 6. Sanity checks (non-fatal)

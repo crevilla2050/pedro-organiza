@@ -2,7 +2,16 @@
 Pedro follows semantic versioning.
 Breaking changes will always be clearly documented.
 
-## [0.8.0] — Pedro Organiza 0.8 — A Deterministic Music Library Manager Built for Safety
+## [0.8.3] — Deterministic Duplicate Clustering & Advisory Intelligence
+
+This release introduces Pedro’s first complete duplicate clustering engine and expands the system from deterministic execution into deterministic analysis.
+
+Pedro can now identify duplicate groups across large libraries and suggest a primary file using fully explainable and reproducible logic.
+
+This marks the beginning of Pedro’s transition from a filesystem restructuring tool into a knowledge-driven library intelligence system.
+
+
+## [0.8.0] — A Deterministic Music Library Manager Built for Safety
 🚀 Pedro Organiza 0.8.0
 
 This release solidifies Pedro’s core architecture and safety model.
@@ -130,7 +139,7 @@ Future releases will focus on execution ergonomics, plan visibility, and operati
 
 ### Compatibility Notes
 - Legacy commands remain available where necessary but are being gradually superseded by clearer operator verbs.
-- No destructive behavior is introduced in this release on pourpose, but will be introduced in the future.
+- No destructive behavior is introduced in this release on purpose, but will be introduced in the future.
 
 
 ---
@@ -199,7 +208,7 @@ This release established the analytical backbone required for safe large-library
 
 ---
 
-## [0.1.0] — Structural Confidence Release
+## [0.1.0] — Initial Release
 Pedro Organiza is a tool for organizing music libraries.
 - Initial CLI interface (`pedro`)
 - SQLite-based knowledge ingestion

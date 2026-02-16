@@ -1,338 +1,511 @@
-# Pedro Organiza 🎵
+# Pedro Organiza
 
-**A deterministic, non-destructive music library manager for large collections**
+**Deterministic music library management for people who care about their collections.**
 
-Pedro Organiza is a **local-first music library manager and organizer** designed to analyze, clean, deduplicate, and safely restructure large real-world music collections.
+Pedro is a database‑first music library restructuring engine designed for safety, reproducibility, and large real‑world collections.
 
-Ideal for collectors, DJs, archivists, and anyone whose library has outgrown traditional players like iTunes or Apple Music.
-
-Pedro is built to handle collections ranging from **tens of thousands to hundreds of thousands of tracks** while prioritizing safety over automation.
-
-Pedro does **not** rename, delete, move, or modify your files by default.
-
-Instead, it:
-
-* Builds a complete, inspectable SQLite knowledge base
-* Detects duplicates, variants, and ambiguous metadata
-* Normalizes and curates genres safely
-* Surfaces conflicts instead of auto-fixing them
-* Lets **you** review and explicitly decide what happens
-
-> **Knowledge first. Actions later. Always auditable.**
-
-Pedro is designed for:
-
-- Large personal music collections  
-- Audiophiles and serious collectors  
-- DJs managing performance libraries  
-- Archivists preserving long-term catalogs  
-- Users migrating away from iTunes / Apple Music  
-- Anyone who refuses to risk silent data loss
-
-This is not a cleanup script.
-This is a **library intelligence system**.
+Unlike traditional organizers that mutate files directly, Pedro builds a structured knowledge base first and lets you review every decision before anything touches your filesystem.
 
 ---
 
-## Why Traditional Music Managers Fail at Scale
+# Project Philosophy
 
-Most music tools assume:
+Pedro is built on a few non‑negotiable ideas.
 
-* Small libraries
-* Clean tags
-* One-click automation
-* Irreversible actions
+## 1. Your music is valuable
 
-Real collections rarely fit that model.
+Music libraries are often:
+- Decades old
+- Irreplaceable
+- Full of rare files
+- Emotionally meaningful
 
-Pedro Organiza is designed for:
+Pedro assumes your collection matters.
 
-* Tens of thousands of tracks
-* Inconsistent or conflicting metadata
-* Multiple recordings of the same work
-* Long-running analysis jobs
-* Users who value **control, safety, and evidence**
-
-Pedro does not guess what you want.
-It gives you **structure, signals, and context** so you can decide correctly.
-
-Many music tools work well for small libraries but begin to break down as collections grow. 
-
-Pedro Organiza was engineered specifically for **large, long-lived music libraries** where data safety, traceability, and deterministic behavior matter.
-
-Supports common formats including MP3, FLAC, WAV, AAC, OGG and more.
+That means:
+- No silent mutations
+- No hidden automation
+- No destructive defaults
 
 ---
 
-## Core Principles
+## 2. Database first, filesystem second
 
-### Knowledge Before Action
+Most organizers operate like this:
 
-All analysis happens first.
-Files are **never modified** during ingestion or curation.
+Scan → Mutate files → Hope for the best
 
-### Human-in-the-Loop
+Pedro does the opposite:
 
-Ambiguities are **surfaced**, not auto-fixed.
-Pedro assists; it never overrides your judgment.
+Scan → Build knowledge → Preview → Apply
 
-### Database as Source of Truth
+The database is the source of truth.
+The filesystem becomes a projection of structured knowledge.
 
-All metadata, genres, tags, clusters, and decisions live in SQLite.
-The filesystem is an **execution target**, not a database.
-
-### Deterministic & Auditable
-
-You can stop, resume, inspect, revise, and replay operations safely.
-Every result is reproducible.
-
-### Resource-Conscious
-
-Designed for laptops, NAS boxes, home servers, and Raspberry Pi-class hardware.
-No aggressive parallelism. No background magic.
+This enables:
+- Deterministic results
+- Auditable decisions
+- Reversible workflows
 
 ---
 
-## High-Level Architecture
+## 3. Determinism over “AI magic”
 
-Pedro Organiza follows a **layered pipeline by design**.
+Pedro avoids opaque heuristics.
 
-### Layer 1 — Ingest & Knowledge (Stable)
+If the same database state exists, Pedro will always:
+- Produce the same preview
+- Generate the same filesystem actions
+- Suggest the same duplicate decisions
 
-* Recursive file discovery
-* Metadata extraction (audio tags)
-* SHA-256 hashing
-* Optional audio fingerprinting (Chromaprint)
-* Album art discovery (embedded + filesystem)
-* **Genre ingestion, normalization, and mapping**
-* Alias signal generation
-* All results stored in SQLite
-
-➡️ **No file mutation**
+No randomness.
+No hidden scoring models.
+No surprises.
 
 ---
 
-### Layer 2 — Analysis & Clustering (Stable)
+## 4. Preview before execution
 
-* Duplicate detection (hash, fingerprint, metadata)
-* Transitive alias clustering
-* Signal confidence aggregation
-* Canonical candidate identification (advisory only)
+Nothing touches your files until you explicitly say so.
 
-➡️ Produces **knowledge**, not actions
+You can always:
+- Preview actions
+- Simulate execution
+- Inspect duplicates
+- Validate schema state
 
----
-
-### Layer 3 — Planning (Active Development)
-
-* Human-reviewed decisions
-* Tag- and genre-assisted filtering
-* Planned actions stored in DB
-* No implicit execution
+Safety is the default, not an option.
 
 ---
 
-### Layer 4 — Execution (Intentionally Conservative)
+## 5. Advisory intelligence, not automation
 
-* Applies **only explicitly planned actions**
-* Filesystem changes driven strictly from database state
-* No irreversible deletes without confirmation
+Pedro can suggest things (like duplicate primaries), but it will never override the operator.
 
----
+You remain in control.
 
-### Layer 5 — UI (Active Development)
-
-* React-based frontend
-* Full library browsing (filter-first, scalable)
-* Alias cluster inspection
-* **Genre normalization & merging UI**
-* Tag & genre side panels
-* Track preview
+Always.
 
 ---
 
-## What Pedro Can Do Today (v0.8.0)
+# What Pedro Is (and Is Not)
 
-Pedro has been engineered with scalability in mind and is suitable for extremely large libraries.
+## Pedro IS
 
-### Backend / CLI
+- A deterministic library restructuring engine
+- A knowledge graph for your music
+- A safe large‑collection organizer
+- A foundation for future UI tooling
 
-* Scan very large music libraries into SQLite
-* Perform schema-only migrations safely
-* Detect duplicates and recording variants
-* Generate alias clusters deterministically
-* Discover, normalize, merge, and curate genres
-* Inspect database state via `pedro status`
-* Apply **database-only** edits (no file mutation)
+## Pedro is NOT
 
-### Genres (First-Class Feature)
+- A media player
+- A tagger replacement (though it can enrich metadata)
+- An AI auto‑organizer
+- A "one‑click fix everything" tool
 
-* Canonical genre table with normalization
-* Multiple raw genres mapped to one canonical genre
-* Safe bulk reassignment of genres
-* OR-based genre filtering
-* UI + CLI aligned on the same model
-
-### API
-
-* Read-only and controlled-write endpoints for:
-
-  * Files
-  * Alias clusters
-  * Tags
-  * Genres
-  * Selection states (applied / partial / available)
-
-### UI
-
-* Browse large libraries safely
-* Filter by tags, genres, artist, cluster
-* Inspect alias clusters
-* Preview tracks
-* Apply tags and genres
-* Bulk metadata edits
-* Mark files for deletion (staging only)
+Pedro is for people who want **control and safety**, not convenience at any cost.
 
 ---
 
-## What Pedro Organiza Is Not
+# Requirements
 
-* ❌ Not a one-click organizer
-* ❌ Not a destructive cleanup script
-* ❌ Not a black-box automation engine
-* ❌ Not a tag-only fixer
+Pedro runs anywhere Python runs.
 
-Pedro Organiza is a **library intelligence system**, not a magic wand.
+## Minimum requirements
 
----
+- Python 3.10+
+- SQLite (bundled with Python)
 
-## Installation — Local Music Library Manager
+## Optional (recommended)
 
-Pedro Organiza is distributed as a **local CLI tool** with an optional UI.
-
-### Requirements
-
-* Python **3.9+**
-* Read access to your music library
-* Write access to the Pedro project directory
-* Disk space for SQLite databases (can be large)
+- Chromaprint / fpcalc (for audio fingerprinting)
+- Large SSD for big libraries
 
 ---
 
-### Quick Install (Linux / macOS)
+# Installation
+
+## 1. Install Python
+
+### Linux
+Most distributions already include Python 3.
+
+Check:
+
+```bash
+python3 --version
+```
+
+If needed:
+
+```bash
+sudo apt install python3 python3-venv python3-pip
+```
+
+---
+
+### macOS
+
+```bash
+brew install python
+```
+
+---
+
+### Windows
+
+Download from:
+https://www.python.org/downloads/
+
+Make sure to check:
+
+✔ Add Python to PATH
+
+---
+
+## 2. Clone Pedro
+
+```bash
+git clone https://github.com/YOUR_USERNAME/pedro-organiza.git
+cd pedro-organiza
+```
+🚀 One-Command Install (Recommended)
+Linux / macOS
 
 ```bash
 chmod +x install.sh
 ./install.sh
-
-source venv/bin/activate
-pedro status
 ```
 
-### Quick Install (Windows)
+Windows
 
-```bat
+Double-click install.bat
+or run in PowerShell:
+
+```powershell
 install.bat
-venv\Scripts\activate
-pedro status
 ```
+
+What the installer does
+
+The installer will:
+* Verify Python 3.9+
+* Create a virtual environment (venv)
+* Install Pedro and dependencies
+* Run sanity checks
+* Warn about optional tools (ffmpeg, Node.js)
+
+No system-wide Python changes are made.
 
 ---
 
-## Basic Usage
+
+## 3. Create virtual environment (recommended)
+Manual Installation (Advanced Users)
+
+If you prefer manual setup:
 
 ```bash
-pedro db-set databases/my_library.sqlite
-
-pedro scan \
-  --src "/path/to/music" \
-  --lib "/path/to/library" \
-  --db-mode full
-```
-
-➡️ Builds a complete knowledge database **without modifying files**.
-
----
-
-## Project Structure
-
-```
-pedro-organiza/
-├── backend/        # Core analysis, genres, planning
-├── cli/            # CLI entrypoints
-├── databases/      # SQLite knowledge bases
-├── music-ui/       # React frontend
-├── tools/          # Inspectors & helpers
-├── tests/
-├── install.sh
-├── install.bat
-├── README.md
-└── LICENSE
+python3 -m venv venv
+pip install -U pip setuptools wheel
+pip install -e .
+source venv/bin/activate   # Linux/macOS
+venv\Scripts\activate     # Windows
 ```
 
 ---
 
-## Current Status (v0.8.0)
+## 4. Install dependencies
 
-* Ingestion pipeline: **stable**
-* Alias clustering: **stable**
-* Tags & genres: **stable**
-* CLI + UI alignment: **stable**
-* Planning layer: **in progress**
-* Execution / export: **intentionally pending**
-* UI: **active development**
+```bash
+pip install -r requirements.txt
+pip install -e .
+```
 
-Pedro is best suited for users comfortable with:
+The editable install exposes the `pedro` CLI.
 
-* Python
-* SQLite
-* Inspectable systems
+Verify:
 
-## Common Use Cases
-
-Pedro Organiza is commonly used for:
-
-- Managing very large music libraries
-- Organizing MP3 collections
-- Deduplicating music files safely
-- Replacing iTunes / Apple Music for local libraries
-- Offline music library management
+```bash
+pedro version
+```
 
 ---
 
-## Roadmap Highlights
+# First Run (Step‑by‑Step)
 
-* Export plan execution engine
-* Dry-run execution reports
-* Execution audit trail UI
-* Playlist export (M3U, XSPF, XML)
-* Canonical resolution workflows
+This is the safest way to start using Pedro.
 
+## Step 1 — Create a database
 
-## License
+Pedro works against a SQLite database.
 
-Pedro Organiza is released under a **Non-Commercial License**.
+```bash
+pedro db set music.sqlite
+pedro migrate
+```
 
-* Free for personal and non-commercial use
-* Source available
-* Commercial use requires explicit permission
+This initializes the schema.
 
-Contact: **[carlos.revilla.m@gmail.com](mailto:carlos.revilla.m@gmail.com)**
+Verify:
+
+```bash
+pedro status
+```
+
+You should see something like:
+
+```
+Pedro database detected OK and is ready to use.
+files: 0
+```
+
+---
+
+## Step 2 — Analyze your library
+
+This scans files and builds knowledge without changing anything.
+
+```bash
+pedro analyze \
+  --src "/path/to/your/music" \
+  --lib "/path/to/canonical/library"
+```
+
+What this does:
+
+- Extracts metadata
+- Computes hashes
+- Detects duplicates
+- Plans filesystem actions
+
+Nothing is modified yet.
 
 ---
 
-## Contributing
+## Optional flags
 
-Pedro Organiza’s architecture is stabilizing.
+### Enable fingerprinting
 
-Feedback and contributions are welcome, especially around:
+```bash
+--with-fingerprint
+```
 
-* Genre normalization rules
-* Duplicate resolution strategies
-* UX for very large libraries
-* Real-world edge cases
-
-Formal contribution guidelines will follow.
+Improves duplicate detection.
 
 ---
+
+### Search album art
+
+```bash
+--search-covers
+```
+
+Enables cover discovery pipeline.
+
+---
+
+# Inspecting Results
+
+## Check database health
+
+```bash
+pedro status
+```
+
+---
+
+## Preview filesystem actions
+
+```bash
+pedro preview
+```
+
+Shows:
+- Planned moves
+- Archives
+- Deletes (quarantine)
+
+---
+
+## Simulate execution
+
+```bash
+pedro apply --dry-run
+```
+
+This performs a full simulation.
+
+---
+
+# Duplicate Analysis
+
+Pedro provides deterministic duplicate clustering.
+
+## Cluster statistics
+
+```bash
+pedro dupes stats
+```
+
+---
+
+## Inspect largest clusters
+
+```bash
+pedro dupes largest --top 10
+```
+
+---
+
+## Suggest a primary file
+
+You can pass either a cluster ID or a file ID.
+
+```bash
+pedro dupes suggest 84
+```
+
+Pedro returns a transparent ranking explaining the choice.
+
+---
+
+## Custom suggestion policies
+
+Prefer smaller files (for portable players):
+
+```bash
+pedro dupes suggest 84 --prefer-smallest
+```
+
+Prefer lossy formats:
+
+```bash
+pedro dupes suggest 84 --prefer-lossy
+```
+
+Prefer specific containers:
+
+```bash
+pedro dupes suggest 84 --prefer-container mp3,aac
+```
+
+All suggestions are advisory only.
+
+Pedro never auto‑deletes duplicates.
+
+---
+
+# Applying Changes
+
+When you're ready:
+
+```bash
+pedro apply
+```
+
+Default behavior:
+- Moves files deterministically
+- Quarantines deletions
+
+---
+
+## Permanent deletion (explicit opt‑in)
+
+```bash
+pedro apply --delete-permanent --yes-i-know-what-im-doing
+```
+
+Pedro requires explicit confirmation by design.
+
+---
+
+# Updating Schema
+
+When Pedro evolves:
+
+```bash
+pedro migrate
+```
+
+Migrations are:
+- Additive
+- Non‑destructive
+- Deterministic
+
+No rescans required in most cases.
+
+---
+
+# Typical Workflow
+
+```bash
+pedro db set music.sqlite
+pedro migrate
+pedro analyze --src ~/Downloads --lib ~/Music --with-fingerprint
+pedro preview
+pedro dupes stats
+pedro dupes suggest 1234
+pedro apply --dry-run
+pedro apply
+```
+
+---
+
+# Safety Model
+
+Pedro is intentionally conservative.
+
+- Quarantine over deletion
+- Preview before apply
+- Deterministic migrations
+- Explicit destructive flags
+
+You are always in control of the final step.
+
+---
+
+# Roadmap (Short)
+
+Planned directions:
+
+- Interactive normalization workflows
+- UI layer on top of the deterministic engine
+- Safer batch deduplication tooling
+- Export profiles and library slicing
+
+Pedro evolves carefully to preserve trust and data safety.
+
+---
+
+# Contributing
+
+Pedro is a long‑term systems project.
+
+Contributions are welcome, especially in:
+
+- Deterministic algorithms
+- Large library testing
+- Cross‑platform robustness
+- Documentation clarity
+
+---
+
+# License
+
+(Choose your license here — MIT, Apache‑2.0, etc.)
+
+---
+
+# Final Words
+
+Pedro exists because music libraries deserve better tools.
+
+If you care about your collection, you deserve:
+- Safety
+- Transparency
+- Reproducibility
+
+Pedro is built for that.
 

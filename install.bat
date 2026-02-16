@@ -61,13 +61,6 @@ if errorlevel 1 (
   exit /b 1
 )
 
-REM -------------------------------
-REM 6. Ensure config.json exists
-REM -------------------------------
-if not exist backend\config.json (
-  echo [INFO] Initializing Pedro config...
-  pedro init --force
-)
 
 REM -------------------------------
 REM 7. UI dependencies (optional)
