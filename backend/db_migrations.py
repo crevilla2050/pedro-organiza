@@ -236,6 +236,89 @@ def migrate_3_to_4(conn):
         ON file_library_map(library_id);
     """)
 
+def migrate_4_to_5(conn):
+    """
+    Migration v5
+    Canonical taxonomy schema upgrade for genres.
+    Adds missing canonical fields expected by taxonomy_core.
+    """
+
+    c = conn.cursor()
+
+    existing_cols = [r[1] for r in c.execute("PRAGMA table_info(genres)")]
+
+    def ensure_col(name, ddl):
+        if name not in existing_cols:
+            c.execute(f"ALTER TABLE genres ADD COLUMN {ddl}")
+
+    # Canonical taxonomy columns
+    ensure_col("source", "source TEXT DEFAULT 'discovered'")
+    ensure_col("created_at", "created_at TEXT")
+    ensure_col("updated_at", "updated_at TEXT")
+
+    # Backfill timestamps for legacy rows
+    c.execute("""
+        UPDATE genres
+        SET created_at = COALESCE(created_at, datetime('now'))
+    """)
+
+    conn.commit()
+
+def migrate_5_to_6(conn):
+    """
+    Migration v6
+    Introduces full genre taxonomy subsystem.
+
+    Adds:
+    - genre_mappings (raw → canonical)
+    - file_genres (file ↔ canonical links)
+    - supporting indexes
+    """
+
+    c = conn.cursor()
+
+    # --------------------------------------------------
+    # genre_mappings (raw token normalization layer)
+    # --------------------------------------------------
+    c.executescript("""
+    CREATE TABLE IF NOT EXISTS genre_mappings (
+        raw_token TEXT PRIMARY KEY,
+        normalized_token TEXT NOT NULL,
+        genre_id INTEGER NOT NULL,
+        source TEXT DEFAULT 'discovered',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (genre_id) REFERENCES genres(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_genre_mappings_genre
+        ON genre_mappings(genre_id);
+    """)
+
+    # --------------------------------------------------
+    # file_genres (many-to-many canonical links)
+    # --------------------------------------------------
+    c.executescript("""
+    CREATE TABLE IF NOT EXISTS file_genres (
+        file_id INTEGER NOT NULL,
+        genre_id INTEGER NOT NULL,
+        source TEXT DEFAULT 'tag',
+        confidence REAL DEFAULT 1.0,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (file_id, genre_id),
+        FOREIGN KEY (file_id) REFERENCES files(id),
+        FOREIGN KEY (genre_id) REFERENCES genres(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_file_genres_file
+        ON file_genres(file_id);
+
+    CREATE INDEX IF NOT EXISTS idx_file_genres_genre
+        ON file_genres(genre_id);
+    """)
+
+    conn.commit()
+
+
     # ==========================================================
     # SCHEMA CONSOLIDATION
     # ==========================================================
@@ -282,8 +365,10 @@ MIGRATIONS = [
     (1, 2, migrate_1_to_2),
     (2, 3, migrate_2_to_3),
     (3, 4, migrate_3_to_4),
+    (4, 5, migrate_4_to_5),
+    (5, 6, migrate_5_to_6),
 ]
-TARGET_SCHEMA_VERSION = 4
+TARGET_SCHEMA_VERSION = 6
 
 
 # ============================================================
