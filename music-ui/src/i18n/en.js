@@ -444,4 +444,26 @@ export default {
   FILES_MARKED_FOR_DELETION: "files marked for deletion",
   CONFIRM_DELETION_WARNING: "I understand that this operation is irreversible",
   APPLY_PENDING_OPERATIONS: "Apply pending operations",
+
+  DOCTOR_SUMMARY_OK: "System is healthy.",
+  DOCTOR_SUMMARY_WARN: "System has warnings.",
+  DOCTOR_SUMMARY_FAIL: "System has critical issues.",
+  DOCTOR_REPORT_SAVED: "Doctor report saved to:",
+  DOCTOR_RUNNING: "Running system diagnostics...",
+  DOCTOR_COMPLETED: "Diagnostics completed.",
+  DOCTOR_CHECK_DB_SCHEMA: "Database schema version",
+  DOCTOR_CHECK_DB_PATH: "Database path validity",
+  DOCTOR_CHECK_DB_LOCK: "Database lock state",
+  DOCTOR_CHECK_DEPENDENCIES: "Optional dependencies",
+  DOCTOR_CHECK_REPORT_COUNT: "Doctor report history",
+  DOCTOR_DB_SCHEMA_OK: "Schema version is up to date.",
+  DOCTOR_DB_SCHEMA_OLD: "Schema upgrade available.",
+  DOCTOR_DB_LOCK_DETECTED: "Database appears to be locked.",
+  DOCTOR_DEP_FFMPEG_MISSING: "ffmpeg not found (optional).",
+  DOCTOR_REPORTS_MANY: "Many doctor reports detected.",
+  DOCTOR_ADVICE_RUN_MIGRATE: "Run 'pedro migrate' to update schema.",
+  DOCTOR_ADVICE_INSTALL_FFMPEG: "Install ffmpeg for fingerprinting support.",
+  DOCTOR_ADVICE_PRUNE_REPORTS: "Consider pruning older doctor reports.",
+
+
 };

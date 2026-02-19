@@ -235,6 +235,9 @@ def main():
         help="Normalize album art after move/archive"
     )
 
+    dup_sub.add_parser("doctor", help="Run Pedro diagnostics")
+
+
     # ---------------- Parse args ----------------
     args = parser.parse_args()
     if args.command == "version":
@@ -364,6 +367,7 @@ def main():
             print(f"{msg('SCHEMA_VERSION')}: {result['schema_version']}")
 
         return
+    
 
     # ---------------- Commands that require DB ----------------
     db_path = get_active_db()
@@ -404,6 +408,21 @@ def main():
         print(f"Diagnostic written to: {out_path}")
         print(f"Deterministic hash: {hash_value}")
 
+    if args.command == "doctor":
+        from backend.doctor.runner import run_doctor, build_doctor_payload
+        from backend.doctor.reporting import write_report
+
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            results = run_doctor(conn)
+
+        payload = build_doctor_payload(results)
+        report_path = write_report(payload)
+
+        print("Doctor report written to:")
+        print(report_path)
+
+        return
 
     # ---------- GENRES ----------
     if args.command == "genres":
